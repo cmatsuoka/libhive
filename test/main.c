@@ -1,0 +1,489 @@
+/*
+ * main.c - test harness for the Hive-V library.
+ *
+ * Commands:
+ *   --init              report the context size and the default sample rate
+ *   --sine              verify the shared sine table against
+ *                       sin(2*pi*i/4096) at all 4096 indices
+ *   --silence [path]    render silence, check it, and write a WAV file
+ *   --api               verify the public API: context lifecycle, parameters,
+ *                       mixer, triggers and render
+ *   --help              this text
+ *
+ * Exit status is 0 when every check passed, 1 otherwise.
+ */
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "h5.h"
+#include "h5_internal.h"
+#include "wav_writer.h"
+
+#ifndef TEST_PI
+#define TEST_PI 3.14159265358979323846
+#endif
+
+#define TEST_SILENCE_SECONDS 0.25
+
+static int failures = 0;
+
+static void fail(const char *what)
+{
+    printf("FAIL: %s\n", what);
+    failures++;
+}
+
+static void ok(const char *what)
+{
+    printf("ok  : %s\n", what);
+}
+
+static struct h5_context_s *context_new(uint32_t sample_rate)
+{
+    struct h5_context_s *ctx =
+        (struct h5_context_s *)h5_create_context(sample_rate);
+
+    if (ctx == 0) {
+        printf("FAIL: out of memory\n");
+        exit(1);
+    }
+    return ctx;
+}
+
+static int command_init(void)
+{
+    struct h5_context_s *ctx = context_new(0);
+
+    printf("context size        : %lu bytes\n",
+        (unsigned long)sizeof(struct h5_context_s));
+    printf("default sample rate : %u Hz\n", (unsigned)H5_DEFAULT_SAMPLE_RATE);
+
+    if (ctx->sample_rate != H5_DEFAULT_SAMPLE_RATE) {
+        fail("h5_create_context(0) did not select the default sample rate");
+    } else {
+        ok("h5_create_context(0) selects the default sample rate");
+    }
+
+    h5_set_sample_rate((h5_context)ctx, 22050);
+    if (ctx->sample_rate != 22050u) {
+        fail("h5_set_sample_rate() did not take effect");
+    } else {
+        ok("h5_set_sample_rate() takes effect");
+    }
+
+    h5_set_sample_rate((h5_context)ctx, 0);
+    if (ctx->sample_rate != H5_DEFAULT_SAMPLE_RATE) {
+        fail("h5_set_sample_rate(0) did not restore the default rate");
+    } else {
+        ok("h5_set_sample_rate(0) restores the default rate");
+    }
+
+    h5_destroy_context((h5_context)ctx);
+
+    return failures == 0 ? 0 : 1;
+}
+
+static int command_sine(void)
+{
+    struct h5_context_s *ctx = context_new(H5_DEFAULT_SAMPLE_RATE);
+    unsigned int i;
+    int mismatches = 0;
+    int worst = 0;
+    int fallback_mismatches = 0;
+
+    if (h5_sine == 0) {
+        fail("h5_create_context() did not rebuild the sine table");
+        h5_destroy_context((h5_context)ctx);
+        return 1;
+    }
+
+    for (i = 0; i < H5_SINE_TABLE_SIZE; i++) {
+        double exact = 32767.0 * sin(2.0 * TEST_PI * (double)i / (double)H5_SINE_TABLE_SIZE);
+        int expected = (int)floor(exact + 0.5);
+        int got = (int)h5_sine[i];
+        int error = got - expected;
+
+        if (error < 0) {
+            error = -error;
+        }
+        if (error > worst) {
+            worst = error;
+        }
+        if (error != 0) {
+            if (mismatches < 8) {
+                printf("      i=%u: got %d, expected %d\n", i, got, expected);
+            }
+            mismatches++;
+        }
+
+        if ((int)h5_sine_at(i) != got) {
+            fallback_mismatches++;
+        }
+    }
+
+    if (mismatches != 0) {
+        printf("FAIL: %d of %u rebuilt entries differ (worst %d LSB)\n",
+            mismatches, (unsigned)H5_SINE_TABLE_SIZE, worst);
+        failures++;
+    } else {
+        ok("the rebuilt table matches sin(2*pi*i/4096) at all 4096 indices");
+    }
+
+    if (fallback_mismatches != 0) {
+        fail("the quadrant fallback disagrees with the rebuilt table");
+    } else {
+        ok("the quadrant lookup agrees with the rebuilt table");
+    }
+
+    /* Only the first quadrant lives in the image; the full period is built
+     * once, on the first h5_create_context(), and shared by every context. */
+    if ((H5_SINE_QUAD_SIZE * sizeof(int16_t)) != 2050u) {
+        fail("the sine quadrant is not 2050 bytes");
+    } else {
+        ok("the sine quadrant is 2050 bytes (1025 x int16)");
+    }
+
+    {
+        const char *table = (const char *)h5_sine;
+        const char *ctx_start = (const char *)ctx;
+        const char *ctx_end = ctx_start + sizeof(struct h5_context_s);
+
+        if ((table >= ctx_start) && (table < ctx_end)) {
+            fail("the sine table lives inside the context");
+        } else {
+            ok("the sine table is shared, not stored in the context");
+        }
+    }
+
+    h5_destroy_context((h5_context)ctx);
+    return failures == 0 ? 0 : 1;
+}
+
+static int command_silence(const char *path)
+{
+    struct h5_context_s *ctx = context_new(H5_DEFAULT_SAMPLE_RATE);
+    const uint32_t sample_rate = H5_DEFAULT_SAMPLE_RATE;
+    size_t frames = (size_t)((TEST_SILENCE_SECONDS * (double)sample_rate) + 0.5);
+    int16_t *buffer = (int16_t *)malloc(frames * 2u * sizeof(int16_t));
+    size_t i;
+    int nonzero = 0;
+
+    if (buffer == 0) {
+        printf("FAIL: out of memory\n");
+        h5_destroy_context((h5_context)ctx);
+        return 1;
+    }
+
+    memset(buffer, 0xA5, frames * 2u * sizeof(int16_t));
+
+    h5_process((h5_context)ctx, buffer, frames);
+
+    for (i = 0; i < frames * 2u; i++) {
+        if (buffer[i] != 0) {
+            nonzero++;
+        }
+    }
+
+    if (nonzero != 0) {
+        printf("FAIL: %d samples are not silent\n", nonzero);
+        failures++;
+    } else {
+        ok("the renderer writes silence when no voice is triggered");
+    }
+
+    if (wav_write_stereo16(path, buffer, frames, sample_rate) != 0) {
+        printf("FAIL: could not write %s\n", path);
+        failures++;
+    } else {
+        printf("ok  : wrote %s (%lu frames)\n", path, (unsigned long)frames);
+    }
+
+    free(buffer);
+    h5_destroy_context((h5_context)ctx);
+    return failures == 0 ? 0 : 1;
+}
+
+static int command_api(void)
+{
+    struct h5_context_s *ctx;
+    int16_t block[64];
+    int32_t value;
+    h5_status status;
+
+    h5_destroy_context(0);
+    ok("h5_destroy_context(NULL) is ignored");
+
+    ctx = context_new(0);
+    if (ctx->sample_rate != H5_DEFAULT_SAMPLE_RATE) {
+        fail("h5_create_context(0) selected the wrong rate");
+    } else {
+        ok("h5_create_context(0) selects the default rate");
+    }
+
+    h5_set_sample_rate((h5_context)ctx, 22050);
+    if (ctx->sample_rate != 22050u) {
+        fail("h5_set_sample_rate() did not take effect");
+    } else {
+        ok("h5_set_sample_rate() takes effect");
+    }
+
+    h5_reset((h5_context)ctx);
+    if (ctx->sample_rate != 22050u) {
+        fail("h5_reset() changed the sample rate");
+    } else {
+        ok("h5_reset() keeps the sample rate");
+    }
+
+    memset(block, 0x5A, sizeof(block));
+    h5_process((h5_context)ctx, block, 0);
+    ok("h5_process() accepts zero frames");
+
+    memset(block, 0x5A, sizeof(block));
+    h5_process((h5_context)ctx, block, sizeof(block) / (2u * sizeof(int16_t)));
+    if (block[0] != 0 || block[63] != 0) {
+        fail("h5_process() did not clear the whole block");
+    } else {
+        ok("h5_process() clears the whole block");
+    }
+
+    h5_destroy_context((h5_context)ctx);
+
+    ctx = context_new(48000);
+    if (ctx->sample_rate != 48000u) {
+        fail("h5_create_context(48000) selected the wrong rate");
+    } else {
+        ok("h5_create_context() honors an explicit rate");
+    }
+
+    /* Parameter set/get round trip. */
+    status = h5_set_param((h5_context)ctx, H5_VOICE_KICK, H5_PARAM_TONE_PITCH,
+        50 * H5_Q16_ONE);
+    if (status != H5_OK) {
+        fail("h5_set_param(Kick, TonePitch, 50 Hz) did not return OK");
+    } else {
+        ok("h5_set_param() accepts a supported parameter");
+    }
+
+    status = h5_get_param((h5_context)ctx, H5_VOICE_KICK, H5_PARAM_TONE_PITCH,
+        &value);
+    if (status != H5_OK || value != 50 * H5_Q16_ONE) {
+        fail("h5_get_param() did not return the stored Kick TonePitch");
+    } else {
+        ok("h5_get_param() round-trips a stored parameter");
+    }
+
+    /* Parameter clamping. */
+    status = h5_set_param((h5_context)ctx, H5_VOICE_KICK, H5_PARAM_TONE_PITCH,
+        1 * H5_Q16_ONE);
+    if (status != H5_ERR_RANGE ||
+        ctx->voice_params[H5_VOICE_KICK][H5_PARAM_TONE_PITCH] != 10 * H5_Q16_ONE) {
+        fail("h5_set_param() did not clamp a value below the minimum");
+    } else {
+        ok("h5_set_param() clamps values below the minimum");
+    }
+
+    status = h5_set_param((h5_context)ctx, H5_VOICE_KICK, H5_PARAM_TONE_PITCH,
+        1000 * H5_Q16_ONE);
+    if (status != H5_ERR_RANGE ||
+        ctx->voice_params[H5_VOICE_KICK][H5_PARAM_TONE_PITCH] != 440 * H5_Q16_ONE) {
+        fail("h5_set_param() did not clamp a value above the maximum");
+    } else {
+        ok("h5_set_param() clamps values above the maximum");
+    }
+
+    /* Unsupported (voice, param) pair. */
+    status = h5_set_param((h5_context)ctx, H5_VOICE_KICK, H5_PARAM_SWEEP, 0);
+    if (status != H5_ERR_UNSUPPORTED) {
+        fail("h5_set_param() did not reject an unsupported (voice, param)");
+    } else {
+        ok("h5_set_param() rejects unsupported (voice, param) pairs");
+    }
+
+    status = h5_get_param((h5_context)ctx, H5_VOICE_KICK, H5_PARAM_SWEEP, &value);
+    if (status != H5_ERR_UNSUPPORTED) {
+        fail("h5_get_param() did not reject an unsupported (voice, param)");
+    } else {
+        ok("h5_get_param() rejects unsupported (voice, param) pairs");
+    }
+
+    /* h5_param_supported(). */
+    if (!h5_param_supported(H5_VOICE_KICK, H5_PARAM_NOISE_PITCH)) {
+        fail("h5_param_supported() wrongly reports Kick NoisePitch unsupported");
+    } else {
+        ok("h5_param_supported() accepts a valid pair");
+    }
+    if (h5_param_supported(H5_VOICE_KICK, H5_PARAM_SWEEP)) {
+        fail("h5_param_supported() wrongly reports Kick Sweep supported");
+    } else {
+        ok("h5_param_supported() rejects an invalid pair");
+    }
+    if (h5_param_supported(H5_VOICE_COUNT, H5_PARAM_DECAY) ||
+        h5_param_supported(H5_VOICE_KICK, H5_PARAM_COUNT)) {
+        fail("h5_param_supported() did not reject out-of-range enums");
+    } else {
+        ok("h5_param_supported() rejects out-of-range enums");
+    }
+
+    /* Mixer set/get round trip and defaults. */
+    status = h5_set_instrument_volume((h5_context)ctx, H5_INSTR_KICK,
+        H5_Q16_ONE);
+    if (status != H5_OK) {
+        fail("h5_set_instrument_volume() did not return OK");
+    }
+    status = h5_get_instrument_volume((h5_context)ctx, H5_INSTR_KICK, &value);
+    if (status != H5_OK || value != H5_Q16_ONE) {
+        fail("h5_get_instrument_volume() did not return the stored value");
+    } else {
+        ok("h5_set_instrument_volume() / h5_get_instrument_volume() round trip");
+    }
+
+    status = h5_set_instrument_pan((h5_context)ctx, H5_INSTR_SNARE, 0);
+    if (status != H5_OK) {
+        fail("h5_set_instrument_pan() did not return OK");
+    }
+    status = h5_get_instrument_pan((h5_context)ctx, H5_INSTR_SNARE, &value);
+    if (status != H5_OK || value != 0) {
+        fail("h5_get_instrument_pan() did not return the stored value");
+    } else {
+        ok("h5_set_instrument_pan() / h5_get_instrument_pan() round trip");
+    }
+
+    /* Mixer clamping. */
+    status = h5_set_instrument_volume((h5_context)ctx, H5_INSTR_TOM,
+        -H5_Q16_ONE);
+    if (status != H5_ERR_RANGE || ctx->instr[H5_INSTR_TOM].volume != 0) {
+        fail("h5_set_instrument_volume() did not clamp a negative value");
+    } else {
+        ok("h5_set_instrument_volume() clamps negative values to zero");
+    }
+
+    status = h5_set_instrument_pan((h5_context)ctx, H5_INSTR_CYMBAL,
+        2 * H5_Q16_ONE);
+    if (status != H5_ERR_RANGE ||
+        ctx->instr[H5_INSTR_CYMBAL].pan != H5_Q16_ONE) {
+        fail("h5_set_instrument_pan() did not clamp a value above one");
+    } else {
+        ok("h5_set_instrument_pan() clamps values above one");
+    }
+
+    /* h5_reset() restores mixer defaults. */
+    h5_reset((h5_context)ctx);
+    if (ctx->instr[H5_INSTR_KICK].volume != H5_Q16_ONE / 2 ||
+        ctx->instr[H5_INSTR_SNARE].pan != H5_Q16_ONE / 2) {
+        fail("h5_reset() did not restore mixer defaults");
+    } else {
+        ok("h5_reset() restores mixer defaults");
+    }
+
+    /* h5_reset() restores parameter defaults. */
+    if (ctx->voice_params[H5_VOICE_KICK][H5_PARAM_TONE_PITCH] !=
+        20 * H5_Q16_ONE) {
+        fail("h5_reset() did not restore Kick TonePitch default");
+    } else {
+        ok("h5_reset() restores parameter defaults");
+    }
+
+    /* Trigger validation and hi-hat gate state. */
+    status = h5_trigger((h5_context)ctx, H5_INSTR_KICK);
+    if (status != H5_OK) {
+        fail("h5_trigger(Kick) did not return OK");
+    } else {
+        ok("h5_trigger() accepts a valid instrument");
+    }
+
+    status = h5_trigger((h5_context)ctx, H5_INSTR_COUNT);
+    if (status != H5_ERR_INVALID_INSTRUMENT) {
+        fail("h5_trigger() did not reject an invalid instrument");
+    } else {
+        ok("h5_trigger() rejects an invalid instrument");
+    }
+
+    status = h5_trigger((h5_context)ctx, H5_INSTR_HIHAT_OPEN);
+    if (status != H5_OK || ctx->hihat_open != 1) {
+        fail("h5_trigger(HiHatOpen) did not raise the open gate");
+    } else {
+        ok("h5_trigger(HiHatOpen) raises the open gate");
+    }
+
+    status = h5_trigger((h5_context)ctx, H5_INSTR_HIHAT_CLOSED);
+    if (status != H5_OK || ctx->hihat_open != 0) {
+        fail("h5_trigger(HiHatClosed) did not lower the open gate");
+    } else {
+        ok("h5_trigger(HiHatClosed) lowers the open gate");
+    }
+
+    /* Null-context handling. */
+    if (h5_set_param(0, H5_VOICE_KICK, H5_PARAM_DECAY, H5_Q16_ONE) !=
+        H5_ERR_INVALID_CONTEXT) {
+        fail("h5_set_param(NULL, ...) did not return INVALID_CONTEXT");
+    } else {
+        ok("h5_set_param() rejects a NULL context");
+    }
+
+    if (h5_get_instrument_volume(0, H5_INSTR_KICK, &value) !=
+        H5_ERR_INVALID_CONTEXT) {
+        fail("h5_get_instrument_volume(NULL, ...) did not return INVALID_CONTEXT");
+    } else {
+        ok("h5_get_instrument_volume() rejects a NULL context");
+    }
+
+    if (h5_trigger(0, H5_INSTR_KICK) != H5_ERR_INVALID_CONTEXT) {
+        fail("h5_trigger(NULL, ...) did not return INVALID_CONTEXT");
+    } else {
+        ok("h5_trigger() rejects a NULL context");
+    }
+
+    h5_destroy_context((h5_context)ctx);
+
+    return failures == 0 ? 0 : 1;
+}
+
+static void usage(const char *program)
+{
+    printf("usage: %s <command>\n\n", program);
+    printf("  --init             report the context size and default sample rate\n"
+        "  --sine             verify the shared sine table, index by index\n"
+        "  --silence [path]   render silence, check it and write a WAV file\n"
+        "                     (default path: build/silence.wav)\n"
+        "  --api              verify the context lifecycle, parameters,\n"
+        "                     mixer, triggers and render entry\n"
+        "  --help             this text\n");
+}
+
+int main(int argc, char **argv)
+{
+    const char *command;
+
+    if (argc < 2) {
+        usage(argv[0]);
+        return 1;
+    }
+
+    command = argv[1];
+
+    if (strcmp(command, "--init") == 0) {
+        return command_init();
+    }
+    if (strcmp(command, "--sine") == 0) {
+        return command_sine();
+    }
+    if (strcmp(command, "--silence") == 0) {
+        const char *path = (argc > 2) ? argv[2] : "build/silence.wav";
+
+        return command_silence(path);
+    }
+    if (strcmp(command, "--api") == 0) {
+        return command_api();
+    }
+    if (strcmp(command, "--help") == 0 || strcmp(command, "-h") == 0) {
+        usage(argv[0]);
+        return 0;
+    }
+
+    printf("unknown command: %s\n\n", command);
+    usage(argv[0]);
+    return 1;
+}
