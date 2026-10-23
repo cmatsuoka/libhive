@@ -341,6 +341,36 @@ static int command_api(void)
         ok("h5_param_supported() rejects out-of-range enums");
     }
 
+    /* Every standard drum voice shares the same six faceplate controls. */
+    {
+        static const h5_voice drum_voices[] = {
+            H5_VOICE_KICK, H5_VOICE_SNARE,
+            H5_VOICE_TOM_1, H5_VOICE_TOM_2, H5_VOICE_TOM_3
+        };
+        static const h5_param faceplate[] = {
+            H5_PARAM_NOISE_PITCH, H5_PARAM_TONE_PITCH, H5_PARAM_BEND,
+            H5_PARAM_DECAY, H5_PARAM_NOISE_TONE, H5_PARAM_CLICK_TONE
+        };
+        size_t vi;
+        size_t pi;
+        int missing = 0;
+
+        for (vi = 0u; vi < sizeof(drum_voices) / sizeof(drum_voices[0]); vi++) {
+            for (pi = 0u; pi < sizeof(faceplate) / sizeof(faceplate[0]); pi++) {
+                if (!h5_param_supported(drum_voices[vi], faceplate[pi])) {
+                    printf("      voice %d is missing param %d\n",
+                        (int)drum_voices[vi], (int)faceplate[pi]);
+                    missing++;
+                }
+            }
+        }
+        if (missing != 0) {
+            fail("a standard drum voice is missing a common faceplate control");
+        } else {
+            ok("all standard drum voices expose the six faceplate controls");
+        }
+    }
+
     /* Mixer set/get round trip and defaults. */
     status = h5_set_instrument_volume((h5_context)ctx, H5_INSTR_KICK,
         H5_Q16_ONE);

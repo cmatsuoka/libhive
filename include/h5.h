@@ -59,8 +59,11 @@ typedef enum {
     H5_INSTR_COUNT
 } h5_instrument;
 
-/* Public sound parameters. Not every parameter applies to every voice;
- * h5_param_supported() reports the supported pairs. */
+/* Public sound parameters. The standard drum voices (Kick, Snare, Tom 1,
+ * Tom 2, Tom 3) share the six faceplate controls Noise, Tone, Bend, Decay,
+ * Noise/Tone and Click/Drum. Sweep is exposed for the Snare and metallic
+ * voices. Not every parameter applies to every voice; h5_param_supported()
+ * reports the supported pairs. */
 typedef enum {
     H5_PARAM_NOISE_PITCH = 0,
     H5_PARAM_TONE_PITCH,
