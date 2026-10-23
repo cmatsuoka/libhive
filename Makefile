@@ -65,6 +65,7 @@ check: $(TEST)
 	./$(TEST) --dsp
 	./$(TEST) --silence $(BUILD)/silence.wav
 	./$(TEST) --api
+	./$(TEST) --tom
 
 clean:
 	rm -rf $(BUILD) $(LIB) $(TEST)

@@ -104,6 +104,7 @@ h5_status h5_set_param(h5_context handle, h5_voice voice, h5_param param,
     }
 
     ctx->voice_params[voice][param] = clamped;
+    h5_voice_configure(ctx, voice);
     return status;
 }
 

@@ -1,9 +1,9 @@
 /*
  * h5.c - Hive-V context lifecycle, trigger/mixer API and render entry point.
  *
- * The voice models are not implemented yet. This file currently provides the
- * context lifecycle, parameter/mixer/trigger API, and a silent renderer so
- * the public API and the test harness can be exercised end to end.
+ * This file provides the context lifecycle, the parameter/mixer/trigger API,
+ * and the render entry point. Voices are added incrementally; instruments
+ * without an engine yet render silence.
  */
 
 #include "h5.h"
@@ -50,6 +50,7 @@ h5_context h5_create_context(uint32_t sample_rate)
     ctx->sample_rate = (sample_rate == 0u) ? H5_DEFAULT_SAMPLE_RATE
         : sample_rate;
     h5_init_defaults(ctx);
+    h5_voice_init_all(ctx);
     return (h5_context)ctx;
 }
 
@@ -67,8 +68,8 @@ void h5_set_sample_rate(h5_context handle, uint32_t sample_rate)
     }
     ctx->sample_rate = (sample_rate == 0u) ? H5_DEFAULT_SAMPLE_RATE
         : sample_rate;
-    /* Runtime voice state will be re-initialized here once it exists. */
     ctx->hihat_open = 0;
+    h5_voice_init_all(ctx);
 }
 
 void h5_reset(h5_context handle)
@@ -79,23 +80,41 @@ void h5_reset(h5_context handle)
         return;
     }
     h5_init_defaults(ctx);
+    h5_voice_reset_all(ctx);
 }
 
 void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
 {
-    (void)handle;
+    struct h5_context_s *ctx = (struct h5_context_s *)handle;
+    size_t i;
+    int32_t volume, pan;
 
     if (stereo_out == 0) {
         return;
     }
 
-    while (frames > 0u) {
-        size_t chunk = (frames < H5_CLEAR_CHUNK) ? frames : H5_CLEAR_CHUNK;
-        size_t values = chunk * 2u;
+    if (ctx == 0) {
+        while (frames > 0u) {
+            size_t chunk = (frames < H5_CLEAR_CHUNK) ? frames : H5_CLEAR_CHUNK;
+            size_t values = chunk * 2u;
 
-        memset(stereo_out, 0, values * sizeof(int16_t));
-        stereo_out += values;
-        frames -= chunk;
+            memset(stereo_out, 0, values * sizeof(int16_t));
+            stereo_out += values;
+            frames -= chunk;
+        }
+        return;
+    }
+
+    volume = ctx->instr[H5_INSTR_TOM].volume;
+    pan = ctx->instr[H5_INSTR_TOM].pan;
+    for (i = 0u; i < frames; i++) {
+        int32_t voice = h5_voice_process(ctx, H5_VOICE_TOM);
+        int32_t mono = h5_mul_q16(voice, volume);
+        int32_t left = h5_mul_q16(mono, H5_Q16_ONE - pan);
+        int32_t right = h5_mul_q16(mono, pan);
+
+        stereo_out[2u * i] = h5_q31_to_q15(left);
+        stereo_out[2u * i + 1u] = h5_q31_to_q15(right);
     }
 }
 
@@ -204,6 +223,8 @@ h5_status h5_trigger(h5_context handle, h5_instrument instrument)
         ctx->hihat_open = 1;
     } else if (instrument == H5_INSTR_HIHAT_CLOSED) {
         ctx->hihat_open = 0;
+    } else if (instrument == H5_INSTR_TOM) {
+        h5_voice_trigger(ctx, H5_VOICE_TOM);
     }
 
     return H5_OK;

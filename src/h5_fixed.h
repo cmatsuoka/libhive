@@ -92,6 +92,12 @@ static inline int32_t h5_sar32_round(int32_t v, unsigned shift)
     return (int32_t)((v + ((int64_t)1 << (shift - 1u))) >> shift);
 }
 
+/* Q31 sample x Q16.16 control -> Q31, rounded and saturated. */
+static inline int32_t h5_mul_q16(int32_t x, int32_t c16)
+{
+    return h5_sat_i32(h5_shr_round(h5_mulwide(x, c16), 16u));
+}
+
 /* Magnitude-truncating shift for Q30-coefficient sums: (acc >> 30) rounded
  * toward zero. Unlike round-to-nearest, truncation toward zero sustains no
  * zero-input limit cycle in a stable biquad; the filter loop uses it so

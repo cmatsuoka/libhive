@@ -8,6 +8,7 @@
  *   --silence [path]    render silence, check it, and write a WAV file
  *   --api               verify the public API: context lifecycle, parameters,
  *                       mixer, triggers and render
+ *   --tom               render a Tom hit and verify its controls
  *   --help              this text
  *
  * Exit status is 0 when every check passed, 1 otherwise.
@@ -21,6 +22,7 @@
 #include "h5.h"
 #include "h5_internal.h"
 #include "dsp.h"
+#include "tests.h"
 #include "wav_writer.h"
 
 #ifndef TEST_PI
@@ -452,6 +454,7 @@ static void usage(const char *program)
         "                     (default path: build/silence.wav)\n"
         "  --api              verify the context lifecycle, parameters,\n"
         "                     mixer, triggers and render entry\n"
+        "  --tom              render a Tom hit and verify its controls\n"
         "  --help             this text\n");
 }
 
@@ -482,6 +485,9 @@ int main(int argc, char **argv)
     }
     if (strcmp(command, "--api") == 0) {
         return command_api();
+    }
+    if (strcmp(command, "--tom") == 0) {
+        return command_tom();
     }
     if (strcmp(command, "--help") == 0 || strcmp(command, "-h") == 0) {
         usage(argv[0]);

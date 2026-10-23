@@ -7,8 +7,8 @@
  * coefficients (a1 approaches -2 at low cutoff and high resonance, which
  * does not fit Q31), Q31 samples and 64-bit products.
  *
- * Coefficients are computed on parameter change only. The reference engine
- * realizes the same analog prototype as a TPT state-variable filter with
+ * Coefficients are computed on parameter change only. The engine realizes
+ * the same analog prototype as a TPT state-variable filter with
  * g = tan(pi*fc/fs); this direct-form biquad is the same bilinear transform
  * (the RBJ sin/cos form is algebraically identical for LP/HP/BP once the
  * cutoff is prewarped by tan(w/2)). Keeping the biquad form lets the
@@ -36,7 +36,7 @@ void h5_svf_reset(struct h5_svf_s *f)
     f->y2 = 0;
 }
 
-void h5_svf_set(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
+void h5_svf_tune(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
     int32_t q_q16, uint32_t sample_rate)
 {
     uint64_t cp, phase, max_cp;
@@ -47,8 +47,8 @@ void h5_svf_set(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
         sample_rate = H5_DEFAULT_SAMPLE_RATE;
     }
 
-    if (q_q16 < H5_Q16_ONE) {
-        q_q16 = H5_Q16_ONE;
+    if (q_q16 < H5_Q16_ONE / 2) {
+        q_q16 = H5_Q16_ONE / 2;
     }
     if (q_q16 > 16 * H5_Q16_ONE) {
         q_q16 = 16 * H5_Q16_ONE;
@@ -109,7 +109,12 @@ void h5_svf_set(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
         f->mode = H5_SVF_LP;
         break;
     }
+}
 
+void h5_svf_set(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
+    int32_t q_q16, uint32_t sample_rate)
+{
+    h5_svf_tune(f, mode, cutoff_q16, q_q16, sample_rate);
     h5_svf_reset(f);
 }
 

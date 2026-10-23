@@ -230,9 +230,9 @@ static void check_noise(void)
         ok("the noise stream changes value every sample at divider 1");
     }
 
-    /* Hold pairs at divider 2: pairs (0,1), (2,3), ... are equal. The
-     * reference LCG runs at the full rate and the value is sampled every
-     * second sample, so the holds are X1, X1, X3, X3, ... */
+    /* Hold pairs at divider 2: pairs (0,1), (2,3), ... are equal. The LCG
+     * runs at the full rate and the value is sampled every second sample, so
+     * the holds are X1, X1, X3, X3, ... */
     h5_noise_init(&a, 1u, 96000);
     bad = 0;
     for (i = 0; i < 10000; i++) {
@@ -252,7 +252,7 @@ static void check_noise(void)
         ok("the noise stream holds each 48 kHz value for 2 samples at 96 kHz");
     }
 
-    /* The reference runs the LCG at the full sample rate and decimates by
+    /* The LCG runs at the full sample rate and the output is decimated by
      * the divider. Check the exact sequence: seed 1, sr 96000, so the held
      * values are the LCG outputs at full-rate indices 0, 2, 4, ... */
     h5_noise_init(&a, 1u, 96000);

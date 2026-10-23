@@ -264,6 +264,64 @@ int32_t h5_semitone_ratio(int semitones)
 }
 
 /*
+ * x^0.7 as Q16.16 for x = j/64, j = 0..64. The drum voices use this
+ * exponent for the NoiseTone and Click controls. Linear interpolation
+ * between the entries is well below the control resolution. Regenerate
+ * with: python3 tools/gen_pow07_table.py
+ */
+const int32_t h5_pow07[H5_POW07_SIZE] = {
+         0,   3566,   5793,   7694,   9410,  11001,
+     12499,  13923,  15287,  16601,  17871,  19104,
+     20304,  21474,  22617,  23737,  24834,  25910,
+     26968,  28008,  29032,  30041,  31035,  32016,
+     32984,  33940,  34885,  35819,  36742,  37656,
+     38560,  39455,  40342,  41221,  42091,  42954,
+     43809,  44658,  45499,  46334,  47162,  47985,
+     48801,  49611,  50416,  51216,  52010,  52799,
+     53582,  54361,  55136,  55905,  56670,  57431,
+     58187,  58940,  59688,  60432,  61172,  61909,
+     62641,  63370,  64096,  64818,  65536
+};
+
+int32_t h5_pow07_q16(int32_t x_q16)
+{
+    uint32_t idx, frac;
+    int32_t a, b;
+
+    if (x_q16 <= 0) {
+        return 0;
+    }
+    if (x_q16 >= H5_Q16_ONE) {
+        return H5_Q16_ONE;
+    }
+    idx = (uint32_t)x_q16 >> 10;
+    frac = (uint32_t)x_q16 & 0x3FFu;
+    a = h5_pow07[idx];
+    b = h5_pow07[idx + 1u];
+    return a + (int32_t)h5_shr_round(h5_mulwide(b - a, (int32_t)frac), 10u);
+}
+
+int32_t h5_semitone_ratio_interp(int32_t semitones_q16)
+{
+    int32_t whole, frac, a, b;
+
+    if (semitones_q16 >= H5_SEMITONE_MAX * H5_Q16_ONE) {
+        return h5_semitone[H5_SEMITONE_COUNT - 1];
+    }
+    if (semitones_q16 <= -H5_SEMITONE_MAX * H5_Q16_ONE) {
+        return h5_semitone[0];
+    }
+
+    /* Arithmetic shift gives floor() for negative values, so the fraction
+     * stays in [0, 1) and the interpolation runs between adjacent entries. */
+    whole = semitones_q16 >> 16;
+    frac = semitones_q16 & 0xFFFF;
+    a = h5_semitone[whole + H5_SEMITONE_MAX];
+    b = h5_semitone[whole + H5_SEMITONE_MAX + 1];
+    return a + (int32_t)h5_shr_round(h5_mulwide(b - a, frac), 16u);
+}
+
+/*
  * Soft-clip shaper: tanh(u) as Q15 for u = j/64, j = 0..96, i.e. the shaper's
  * actual tanh argument range [0, 1.5) in Q29 with 97 uniform steps. There is
  * no dead tail: the shaper's |u| never exceeds 1.5. Negative arguments are
