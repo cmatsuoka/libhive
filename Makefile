@@ -3,6 +3,7 @@
 # Targets:
 #   all     build libhive.a
 #   check   build and run the test harness
+#   example build the OpenAL keys player
 #   clean   remove the build products
 
 CC      ?= cc
@@ -35,11 +36,18 @@ LIB_SRCS  := $(wildcard src/*.c)
 TEST_SRCS := $(wildcard test/*.c)
 LIB_OBJS  := $(patsubst src/%.c,$(BUILD)/src/%.o,$(LIB_SRCS))
 TEST_OBJS := $(patsubst test/%.c,$(BUILD)/test/%.o,$(TEST_SRCS))
+EXAMPLES  := $(wildcard examples/*.c)
+EXAMPLE_OBJS := $(patsubst examples/%.c,$(BUILD)/examples/%.o,$(EXAMPLES))
 
 LIB  := libhive.a
 TEST := h5_test
+EXAMPLE := $(BUILD)/examples/play_keys
 
-.PHONY: all check clean
+OPENAL_CFLAGS := $(shell pkg-config --cflags openal 2>/dev/null)
+OPENAL_LIBS   := $(shell pkg-config --libs openal 2>/dev/null || echo -lopenal)
+
+
+.PHONY: all check example clean
 
 all: $(LIB)
 
@@ -58,8 +66,20 @@ $(BUILD)/test/%.o: test/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(TEST_CFLAGS) -c -o $@ $<
 
-check: $(TEST)
-	@mkdir -p $(BUILD)
+$(BUILD)/examples/%.o: examples/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(LIB_CFLAGS) -c -o $@ $<
+
+example: $(EXAMPLE)
+
+$(EXAMPLE): $(BUILD)/examples/play_keys.o $(LIB)
+	$(CC) $(TEST_CFLAGS) -o $@ $< -L. -lhive $(OPENAL_LIBS)
+
+$(BUILD)/examples/play_keys.o: examples/play_keys.c
+	@mkdir -p $(dir $@)
+	$(CC) $(LIB_CFLAGS) $(OPENAL_CFLAGS) -c -o $@ $<
+
+check: $(TEST) $(EXAMPLE_OBJS)
 	./$(TEST) --init
 	./$(TEST) --sine
 	./$(TEST) --dsp
@@ -73,4 +93,4 @@ check: $(TEST)
 clean:
 	rm -rf $(BUILD) $(LIB) $(TEST)
 
--include $(LIB_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
+-include $(LIB_OBJS:.o=.d) $(TEST_OBJS:.o=.d) $(EXAMPLE_OBJS:.o=.d)
