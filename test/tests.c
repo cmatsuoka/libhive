@@ -359,6 +359,327 @@ int command_tom(void)
     return failures == 0 ? 0 : 1;
 }
 
+static void set_kick(h5_context ctx, h5_param param, int32_t value)
+{
+    h5_set_param(ctx, H5_VOICE_KICK, param, value);
+}
+
+static int command_kick_hit(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 1500u);
+    const size_t check_start = frames_for_ms(TEST_RATE, 1200u);
+    int16_t *buffer;
+    size_t first, last;
+    int32_t peak, tail_peak;
+    unsigned crossings;
+
+    h5_reset(ctx);
+    set_kick(ctx, H5_PARAM_TONE_PITCH, 60 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_NOISE_PITCH, 6000 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE / 2);
+    set_kick(ctx, H5_PARAM_BEND, 36 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_DECAY, H5_Q16_ONE / 2);
+
+    h5_trigger(ctx, H5_INSTR_KICK);
+    buffer = render(ctx, frames);
+    if (buffer == 0) {
+        fail("out of memory");
+        return -1;
+    }
+
+    first = first_above(buffer, frames, 16);
+    last = last_above(buffer, frames, 16);
+    peak = peak_abs(buffer, 0u, frames);
+    tail_peak = peak_abs(buffer, check_start, frames);
+    crossings = zero_crossings(buffer, 0u, frames_for_ms(TEST_RATE, 100u));
+
+    if (first > frames_for_ms(TEST_RATE, 10u)) {
+        fail("the Kick hit does not start promptly");
+    } else {
+        ok("the Kick hit starts promptly");
+    }
+
+    if (tail_peak > 1) {
+        fail("the Kick default tail does not decay to silence");
+    } else {
+        ok("the Kick default tail decays to silence");
+    }
+
+    if (peak < 1000 || last <= first) {
+        fail("the Kick default hit is silent or degenerate");
+    } else {
+        ok("the Kick default hit is audible");
+    }
+
+    if (crossings < 5u || crossings > 3000u) {
+        fail("the Kick default timbre is outside the expected band");
+    } else {
+        ok("the Kick default timbre is in the expected band");
+    }
+
+    if (wav_write_stereo16("build/kick.wav", buffer, frames, TEST_RATE) != 0) {
+        fail("could not write build/kick.wav");
+    } else {
+        printf("ok  : wrote build/kick.wav (%lu frames)\n",
+            (unsigned long)frames);
+    }
+
+    free(buffer);
+    return 0;
+}
+
+static int command_kick_pitch(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 250u);
+    const size_t window = frames_for_ms(TEST_RATE, 150u);
+    int16_t *low;
+    int16_t *high;
+    unsigned zc_low, zc_high;
+
+    h5_reset(ctx);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_kick(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_kick(ctx, H5_PARAM_BEND, 0);
+    set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_TONE_PITCH, 50 * H5_Q16_ONE);
+    h5_trigger(ctx, H5_INSTR_KICK);
+    low = render(ctx, frames);
+
+    h5_reset(ctx);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_kick(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_kick(ctx, H5_PARAM_BEND, 0);
+    set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_TONE_PITCH, 200 * H5_Q16_ONE);
+    h5_trigger(ctx, H5_INSTR_KICK);
+    high = render(ctx, frames);
+
+    if (low == 0 || high == 0) {
+        fail("out of memory");
+        free(low);
+        free(high);
+        return -1;
+    }
+
+    zc_low = zero_crossings(low, 0u, window);
+    zc_high = zero_crossings(high, 0u, window);
+
+    if (zc_high < 2u * zc_low) {
+        fail("Kick TonePitch does not raise the tone frequency");
+    } else {
+        ok("Kick TonePitch raises the tone frequency");
+    }
+
+    free(low);
+    free(high);
+    return 0;
+}
+
+static int command_kick_bend(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 250u);
+    const size_t window = frames_for_ms(TEST_RATE, 150u);
+    int16_t *flat;
+    int16_t *fall;
+    unsigned zc_flat, zc_fall;
+
+    h5_reset(ctx);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_kick(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_TONE_PITCH, 30 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_BEND, 0);
+    h5_trigger(ctx, H5_INSTR_KICK);
+    flat = render(ctx, frames);
+
+    h5_reset(ctx);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_kick(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_TONE_PITCH, 30 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_BEND, 36 * H5_Q16_ONE);
+    h5_trigger(ctx, H5_INSTR_KICK);
+    fall = render(ctx, frames);
+
+    if (flat == 0 || fall == 0) {
+        fail("out of memory");
+        free(flat);
+        free(fall);
+        return -1;
+    }
+
+    zc_flat = zero_crossings(flat, 0u, window);
+    zc_fall = zero_crossings(fall, 0u, window);
+
+    if (zc_fall < 2u * zc_flat) {
+        fail("Kick Bend does not lower the pitch over the hit");
+    } else {
+        ok("Kick Bend lowers the pitch over the hit");
+    }
+
+    free(flat);
+    free(fall);
+    return 0;
+}
+
+static int command_kick_decay(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 2000u);
+    int16_t *short_hit;
+    int16_t *long_hit;
+    size_t short_end, long_end;
+
+    h5_reset(ctx);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE / 2);
+    set_kick(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_kick(ctx, H5_PARAM_BEND, 0);
+    set_kick(ctx, H5_PARAM_DECAY, H5_Q16_ONE / 5);
+    h5_trigger(ctx, H5_INSTR_KICK);
+    short_hit = render(ctx, frames);
+
+    h5_reset(ctx);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE / 2);
+    set_kick(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_kick(ctx, H5_PARAM_BEND, 0);
+    set_kick(ctx, H5_PARAM_DECAY, 3 * H5_Q16_ONE / 2);
+    h5_trigger(ctx, H5_INSTR_KICK);
+    long_hit = render(ctx, frames);
+
+    if (short_hit == 0 || long_hit == 0) {
+        fail("out of memory");
+        free(short_hit);
+        free(long_hit);
+        return -1;
+    }
+
+    short_end = last_above(short_hit, frames, 8);
+    long_end = last_above(long_hit, frames, 8);
+
+    if (long_end <= short_end + frames_for_ms(TEST_RATE, 300u)) {
+        fail("Kick Decay does not lengthen the tail");
+    } else {
+        ok("Kick Decay lengthens the tail");
+    }
+
+    free(short_hit);
+    free(long_hit);
+    return 0;
+}
+
+static int command_kick_noise(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 250u);
+    const size_t window = frames_for_ms(TEST_RATE, 150u);
+    int16_t *tone;
+    int16_t *noise;
+    unsigned zc_tone, zc_noise;
+
+    /* The noise path is gated by Click^0.7 as well as NoiseTone, so keep a
+     * non-zero Click to compare the two balance extremes. */
+    h5_reset(ctx);
+    set_kick(ctx, H5_PARAM_TONE_PITCH, 60 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_BEND, 0);
+    set_kick(ctx, H5_PARAM_CLICK_TONE, H5_Q16_ONE / 2);
+    set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, 0);
+    h5_trigger(ctx, H5_INSTR_KICK);
+    tone = render(ctx, frames);
+
+    h5_reset(ctx);
+    set_kick(ctx, H5_PARAM_TONE_PITCH, 60 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_BEND, 0);
+    set_kick(ctx, H5_PARAM_CLICK_TONE, H5_Q16_ONE / 2);
+    set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
+    h5_trigger(ctx, H5_INSTR_KICK);
+    noise = render(ctx, frames);
+
+    if (tone == 0 || noise == 0) {
+        fail("out of memory");
+        free(tone);
+        free(noise);
+        return -1;
+    }
+
+    zc_tone = zero_crossings(tone, 0u, window);
+    zc_noise = zero_crossings(noise, 0u, window);
+
+    if (zc_noise < 2u * zc_tone) {
+        fail("Kick NoiseTone does not add high-frequency noise");
+    } else {
+        ok("Kick NoiseTone adds high-frequency noise");
+    }
+
+    free(tone);
+    free(noise);
+    return 0;
+}
+
+static int16_t *render_kick_click(int32_t click, size_t frames)
+{
+    h5_context ctx = h5_create_context(TEST_RATE);
+    int16_t *buffer;
+
+    if (ctx == 0) {
+        return 0;
+    }
+    h5_reset(ctx);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_BEND, 0);
+    set_kick(ctx, H5_PARAM_DECAY, H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_CLICK_TONE, click);
+    h5_trigger(ctx, H5_INSTR_KICK);
+    buffer = render(ctx, frames);
+    h5_destroy_context(ctx);
+    return buffer;
+}
+
+static int command_kick_click(void)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 500u);
+    const size_t bytes = frames * 2u * sizeof(int16_t);
+    int16_t *a = render_kick_click(0, frames);
+    int16_t *b = render_kick_click(H5_Q16_ONE, frames);
+
+    if (a == 0 || b == 0) {
+        fail("out of memory");
+        free(a);
+        free(b);
+        return -1;
+    }
+    if (memcmp(a, b, bytes) == 0) {
+        fail("Kick Click does not change the output");
+    } else {
+        ok("Kick Click changes the output");
+    }
+    free(a);
+    free(b);
+    return 0;
+}
+
+int command_kick(void)
+{
+    h5_context ctx = h5_create_context(TEST_RATE);
+
+    if (ctx == 0) {
+        fail("could not create a context");
+        return 1;
+    }
+
+    if (command_kick_hit(ctx) != 0 ||
+        command_kick_pitch(ctx) != 0 ||
+        command_kick_bend(ctx) != 0 ||
+        command_kick_decay(ctx) != 0 ||
+        command_kick_noise(ctx) != 0 ||
+        command_kick_click() != 0) {
+        h5_destroy_context(ctx);
+        return 1;
+    }
+
+    h5_destroy_context(ctx);
+    return failures == 0 ? 0 : 1;
+}
+
 static void set_snare(h5_context ctx, h5_param param, int32_t value)
 {
     h5_set_param(ctx, H5_VOICE_SNARE, param, value);

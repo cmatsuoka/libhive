@@ -5,6 +5,7 @@
 #ifndef TESTS_H
 #define TESTS_H
 
+int command_kick(void);
 int command_tom(void);
 int command_snare(void);
 

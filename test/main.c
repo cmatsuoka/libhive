@@ -8,6 +8,7 @@
  *   --silence [path]    render silence, check it, and write a WAV file
  *   --api               verify the public API: context lifecycle, parameters,
  *                       mixer, triggers and render
+ *   --kick              render a Kick hit and verify its controls
  *   --tom               render a Tom hit and verify its controls
  *   --snare             render a Snare hit and verify its controls
  *   --help              this text
@@ -464,6 +465,7 @@ static void usage(const char *program)
         "                     (default path: build/silence.wav)\n"
         "  --api              verify the context lifecycle, parameters,\n"
         "                     mixer, triggers and render entry\n"
+        "  --kick             render a Kick hit and verify its controls\n"
         "  --tom              render a Tom hit and verify its controls\n"
         "  --snare            render a Snare hit and verify its controls\n"
         "  --help             this text\n");
@@ -496,6 +498,9 @@ int main(int argc, char **argv)
     }
     if (strcmp(command, "--api") == 0) {
         return command_api();
+    }
+    if (strcmp(command, "--kick") == 0) {
+        return command_kick();
     }
     if (strcmp(command, "--tom") == 0) {
         return command_tom();

@@ -9,6 +9,9 @@
 
 void h5_voice_init_all(struct h5_context_s *ctx)
 {
+    h5_kick_init(&ctx->kick, ctx->sample_rate);
+    h5_kick_configure(&ctx->kick, ctx->voice_params[H5_VOICE_KICK],
+        ctx->sample_rate);
     h5_tom_init(&ctx->tom, ctx->sample_rate);
     h5_tom_configure(&ctx->tom, ctx->voice_params[H5_VOICE_TOM],
         ctx->sample_rate);
@@ -24,7 +27,10 @@ void h5_voice_reset_all(struct h5_context_s *ctx)
 
 void h5_voice_configure(struct h5_context_s *ctx, h5_voice voice)
 {
-    if (voice == H5_VOICE_TOM) {
+    if (voice == H5_VOICE_KICK) {
+        h5_kick_configure(&ctx->kick, ctx->voice_params[H5_VOICE_KICK],
+            ctx->sample_rate);
+    } else if (voice == H5_VOICE_TOM) {
         h5_tom_configure(&ctx->tom, ctx->voice_params[H5_VOICE_TOM],
             ctx->sample_rate);
     } else if (voice == H5_VOICE_SNARE) {
@@ -35,7 +41,9 @@ void h5_voice_configure(struct h5_context_s *ctx, h5_voice voice)
 
 void h5_voice_trigger(struct h5_context_s *ctx, h5_voice voice)
 {
-    if (voice == H5_VOICE_TOM) {
+    if (voice == H5_VOICE_KICK) {
+        h5_kick_trigger(&ctx->kick);
+    } else if (voice == H5_VOICE_TOM) {
         h5_tom_trigger(&ctx->tom);
     } else if (voice == H5_VOICE_SNARE) {
         h5_snare_trigger(&ctx->snare);
@@ -44,6 +52,9 @@ void h5_voice_trigger(struct h5_context_s *ctx, h5_voice voice)
 
 int32_t h5_voice_process(struct h5_context_s *ctx, h5_voice voice)
 {
+    if (voice == H5_VOICE_KICK) {
+        return h5_kick_process(&ctx->kick, ctx->sample_rate);
+    }
     if (voice == H5_VOICE_TOM) {
         return h5_tom_process(&ctx->tom, ctx->sample_rate);
     }

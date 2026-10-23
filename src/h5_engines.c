@@ -1,8 +1,8 @@
 /*
  * h5_engines.c - per-voice DSP engines.
  *
- * Contains the Tom and Snare engines. Engine-only controls that are not part
- * of the public surface are fixed at their documented defaults:
+ * Contains the Kick, Tom and Snare engines. Engine-only controls that are not
+ * part of the public surface are fixed at their documented defaults:
  *
  *   Drive          0.15
  *   Filter Bend    0.50
@@ -39,6 +39,190 @@
 
 /* 5 ms body attack and 1 ms transient attack. */
 #define H5_MS_Q16(ms) (((ms) * H5_Q16_ONE + 500) / 1000)
+
+/*
+ * Kick engine.
+ *
+ * Signal flow:
+ *   env_n  = AR(0.2*NoiseDecay + 0.1, NoiseDecay)
+ *   fc_n   = (NoisePitch + 2000*gain^4 * env_n^3)
+ *            * (1 - FilterBend * (1 - env_n^3))
+ *   nf     = SVF(u_hold; fc_n, Q)
+ *   noise  = nf * env_n * Click^0.7 * NoiseTone
+ *
+ *   f      = TonePitch * 2^(Bend * env_t / 12)
+ *   s      = sin(2*pi*phi), s2 = sin((pi/2)*s)
+ *   env_t  = AR(0, Decay)
+ *   tone   = env_t * (1-Click)^0.7
+ *            * ((1-Drive)*s + Drive*0.5*(s2 + s))
+ *
+ *   y      = tanh(1.5 * (tone + noise))
+ *   out    = LP_SVF(y; NoisePitch, Q) * Volume * Gain
+ *
+ * The single Decay knob drives both envelopes: ToneDecay = Decay and
+ * NoiseDecay = Decay/2, preserving the documented 0.4 s / 0.2 s ratio at the
+ * default.
+ *
+ * Engine-only controls fixed at their documented defaults:
+ *   Drive          0.15
+ *   Filter Bend    1.00
+ *   Resonance      1.00
+ *   Volume         0.50
+ *   Gain           1.00
+ *
+ * The source engine does not read the Kick Bend control; this engine applies a
+ * real pitch envelope so H5_PARAM_BEND has an audible effect.
+ */
+
+#define H5_KICK_DRIVE_Q16       (15 * H5_Q16_ONE / 100)
+#define H5_KICK_FILTER_BEND_Q16 H5_Q16_ONE
+#define H5_KICK_RESONANCE_Q16   H5_Q16_ONE
+#define H5_KICK_VOLUME_Q16      (H5_Q16_ONE / 2)
+#define H5_KICK_GAIN_Q16        H5_Q16_ONE
+#define H5_KICK_NOISE_SWEEP_Q16 (2000 * H5_Q16_ONE)
+
+void h5_kick_init(struct h5_kick_s *k, uint32_t sample_rate)
+{
+    h5_env_init(&k->env_noise);
+    h5_env_init(&k->env_tone);
+    h5_noise_init_voice(&k->noise, H5_VOICE_KICK, sample_rate);
+    h5_svf_reset(&k->noise_filter);
+    h5_svf_reset(&k->out_filter);
+    k->phase = 0u;
+    k->base_inc = 0;
+    k->bend_q16 = 0;
+    k->noise_pitch_q16 = 0;
+    k->noise_tone_q16 = 0;
+    k->tone_gain_q16 = 0;
+    k->click_gain_q16 = 0;
+    k->active = 0u;
+}
+
+void h5_kick_configure(struct h5_kick_s *k,
+    const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate)
+{
+    int64_t inc;
+    int32_t click, decay, noise_decay, noise_attack;
+
+    if (sample_rate == 0u) {
+        sample_rate = H5_DEFAULT_SAMPLE_RATE;
+    }
+
+    click = params[H5_PARAM_CLICK_TONE];
+    decay = params[H5_PARAM_DECAY];
+
+    k->bend_q16 = params[H5_PARAM_BEND];
+    k->noise_pitch_q16 = params[H5_PARAM_NOISE_PITCH];
+    k->noise_tone_q16 = params[H5_PARAM_NOISE_TONE];
+
+    /* Click is split into the transient and tone laws. */
+    k->click_gain_q16 = h5_pow07_q16(click);
+    k->tone_gain_q16 = h5_pow07_q16(H5_Q16_ONE - click);
+
+    /* cycles/sample = pitch/rate; the 28-bit phase unit adds 2^28. pitch is
+     * Q16 Hz, so the numerator is pitch << 12. */
+    inc = ((int64_t)params[H5_PARAM_TONE_PITCH] << 12) / sample_rate;
+    if (inc < 1) {
+        inc = 1;
+    }
+    k->base_inc = (int32_t)inc;
+
+    /* The single Decay knob drives tone and noise at the documented 2:1
+     * ratio. NoiseDecay = Decay/2, and the noise attack is
+     * 0.2*NoiseDecay + 0.1 = 0.1*Decay + 0.1 seconds. */
+    noise_decay = decay / 2;
+    noise_attack = (decay + H5_Q16_ONE + 5) / 10;
+    h5_env_set_times(&k->env_noise, noise_attack, noise_decay, sample_rate);
+    h5_env_set_times(&k->env_tone, 0, decay, sample_rate);
+
+    h5_svf_tune(&k->noise_filter, H5_SVF_LP, params[H5_PARAM_NOISE_PITCH],
+        H5_KICK_RESONANCE_Q16, sample_rate);
+    h5_svf_tune(&k->out_filter, H5_SVF_LP, params[H5_PARAM_NOISE_PITCH],
+        H5_KICK_RESONANCE_Q16, sample_rate);
+}
+
+void h5_kick_trigger(struct h5_kick_s *k)
+{
+    k->phase = 0u;
+    h5_env_trigger(&k->env_noise);
+    h5_env_trigger(&k->env_tone);
+    h5_svf_reset(&k->noise_filter);
+    h5_svf_reset(&k->out_filter);
+    k->active = 1u;
+}
+
+int32_t h5_kick_process(struct h5_kick_s *k, uint32_t sample_rate)
+{
+    int32_t env_n, env_t, env3, env3_q16, one_minus, semitones_q16, ratio;
+    int32_t inc, s, s2, half, swept, base, cutoff, u, nf, tone, noise, sum;
+    int32_t blend, y, out;
+
+    if (!k->active) {
+        return 0;
+    }
+
+    env_n = h5_env_next(&k->env_noise);
+    env_t = h5_env_next(&k->env_tone);
+    if (env_n <= 0 && env_t <= 0
+        && k->env_noise.state == H5_ENV_DONE
+        && k->env_tone.state == H5_ENV_DONE) {
+        k->active = 0u;
+        return 0;
+    }
+
+    env3 = h5_cube_q30(env_n);
+    env3_q16 = env3 >> 14;
+
+    /* Pitch envelope: f = TonePitch * 2^(Bend * env_t / 12). */
+    semitones_q16 = (int32_t)h5_shr_round((int64_t)k->bend_q16 * env_t, 30u);
+    ratio = h5_semitone_ratio_interp(semitones_q16);
+    inc = (int32_t)h5_shr_round(h5_mulwide(k->base_inc, ratio), 16u);
+    if (inc < 1) {
+        inc = 1;
+    }
+    k->phase = (k->phase + (uint32_t)inc) & 0x0FFFFFFFu;
+
+    s = h5_sine_interp(k->phase);
+    /* s2 = sin((pi/2) * s); a quarter of s's normalized value is 2^26 of a
+     * 28-bit phase, i.e. s >> 5 for a Q31 sample. */
+    s2 = h5_sine_interp((uint32_t)(s >> 5));
+
+    /* fc_n = (NoisePitch + 2000*gain^4*env^3)
+     *        * (1 - FilterBend*(1 - env^3))
+     * Gain is fixed at 1.0 and FilterBend at its Kick default 1.0. */
+    one_minus = H5_Q16_ONE - env3_q16;
+    swept = h5_mul_q16(H5_KICK_FILTER_BEND_Q16, one_minus);
+    base = h5_sat_i32((int64_t)k->noise_pitch_q16
+        + h5_mul_q16(H5_KICK_NOISE_SWEEP_Q16, env3_q16));
+    cutoff = h5_mul_q16(base, H5_Q16_ONE - swept);
+
+    h5_svf_tune(&k->noise_filter, H5_SVF_LP, cutoff, H5_KICK_RESONANCE_Q16,
+        sample_rate);
+    u = h5_noise_next(&k->noise);
+    nf = h5_svf_run(&k->noise_filter, u);
+
+    /* Noise: nf * env_n * Click^0.7 * NoiseTone. */
+    noise = h5_mul_q30(nf, env_n);
+    noise = h5_mul_q16(noise, k->click_gain_q16);
+    noise = h5_mul_q16(noise, k->noise_tone_q16);
+
+    /* Tone: env_t * (1-Click)^0.7 * ((1-Drive)*s + Drive*0.5*(s2 + s)). */
+    half = (int32_t)(((int64_t)s2 + (int64_t)s) / 2);
+    blend = h5_sat_add_q31(
+        h5_mul_q16(s, H5_Q16_ONE - H5_KICK_DRIVE_Q16),
+        h5_mul_q16(half, H5_KICK_DRIVE_Q16));
+    tone = h5_mul_q30(blend, env_t);
+    tone = h5_mul_q16(tone, k->tone_gain_q16);
+
+    sum = h5_sat_add_q31(tone, noise);
+    y = h5_softclip_q31(sum);
+
+    out = h5_svf_run(&k->out_filter, y);
+    out = h5_mul_q16(out, H5_KICK_VOLUME_Q16);
+    out = h5_mul_q16(out, H5_KICK_GAIN_Q16);
+
+    return out;
+}
 
 static int32_t h5_pow10_q30(int32_t v)
 {

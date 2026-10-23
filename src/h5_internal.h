@@ -185,6 +185,24 @@ void h5_svf_tune(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
 /* Advance one sample and return the Q31 output of the configured mode. */
 int32_t h5_svf_run(struct h5_svf_s *f, int32_t x);
 
+/* Kick voice runtime state. The engine keeps its own copies of the parameters
+ * it needs per sample so the audio path never reads the parameter matrix. */
+struct h5_kick_s {
+    struct h5_env_s env_noise; /* noise AR: 0.2*NoiseDecay + 0.1, NoiseDecay */
+    struct h5_env_s env_tone;  /* tone AR: 0 s attack, Decay release */
+    struct h5_noise_s noise;
+    struct h5_svf_s noise_filter;
+    struct h5_svf_s out_filter;
+    uint32_t phase;          /* 28-bit tone oscillator phase */
+    int32_t base_inc;        /* phase28 increment at TonePitch, no bend */
+    int32_t bend_q16;        /* pitch-envelope depth, semitones Q16 */
+    int32_t noise_pitch_q16; /* noise/output filter base cutoff, Hz Q16 */
+    int32_t noise_tone_q16;  /* linear NoiseTone weight on the noise path */
+    int32_t tone_gain_q16;   /* (1 - Click)^0.7 */
+    int32_t click_gain_q16;  /* Click^0.7 */
+    uint8_t active;
+};
+
 /* Tom voice runtime state. The engine keeps its own copies of the parameters
  * it needs per sample so the audio path never reads the parameter matrix. */
 struct h5_tom_s {
@@ -241,9 +259,17 @@ struct h5_context_s {
     uint8_t hihat_open;
 
     /* Voice runtime state, initialized by h5_voice_init_all(). */
+    struct h5_kick_s kick;
     struct h5_tom_s tom;
     struct h5_snare_s snare;
 };
+
+/* Kick engine. */
+void h5_kick_init(struct h5_kick_s *k, uint32_t sample_rate);
+void h5_kick_configure(struct h5_kick_s *k,
+    const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
+void h5_kick_trigger(struct h5_kick_s *k);
+int32_t h5_kick_process(struct h5_kick_s *k, uint32_t sample_rate);
 
 /* Tom engine. Times and controls are taken from the context's parameter
  * matrix; the noise generator is seeded once per context and free-runs
