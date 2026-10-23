@@ -83,11 +83,20 @@ void h5_reset(h5_context handle)
     h5_voice_reset_all(ctx);
 }
 
+static void h5_render_voice(struct h5_context_s *ctx, h5_voice voice,
+    h5_instrument instr, int32_t *left, int32_t *right)
+{
+    int32_t voice_out = h5_voice_process(ctx, voice);
+    int32_t mono = h5_mul_q16(voice_out, ctx->instr[instr].volume);
+
+    *left = h5_mul_q16(mono, H5_Q16_ONE - ctx->instr[instr].pan);
+    *right = h5_mul_q16(mono, ctx->instr[instr].pan);
+}
+
 void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
 {
     struct h5_context_s *ctx = (struct h5_context_s *)handle;
     size_t i;
-    int32_t volume, pan;
 
     if (stereo_out == 0) {
         return;
@@ -105,13 +114,16 @@ void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
         return;
     }
 
-    volume = ctx->instr[H5_INSTR_TOM].volume;
-    pan = ctx->instr[H5_INSTR_TOM].pan;
     for (i = 0u; i < frames; i++) {
-        int32_t voice = h5_voice_process(ctx, H5_VOICE_TOM);
-        int32_t mono = h5_mul_q16(voice, volume);
-        int32_t left = h5_mul_q16(mono, H5_Q16_ONE - pan);
-        int32_t right = h5_mul_q16(mono, pan);
+        int32_t tom_l, tom_r, snare_l, snare_r;
+        int32_t left, right;
+
+        h5_render_voice(ctx, H5_VOICE_TOM, H5_INSTR_TOM, &tom_l, &tom_r);
+        h5_render_voice(ctx, H5_VOICE_SNARE, H5_INSTR_SNARE,
+            &snare_l, &snare_r);
+
+        left = h5_sat_add_q31(tom_l, snare_l);
+        right = h5_sat_add_q31(tom_r, snare_r);
 
         stereo_out[2u * i] = h5_q31_to_q15(left);
         stereo_out[2u * i + 1u] = h5_q31_to_q15(right);
@@ -225,6 +237,8 @@ h5_status h5_trigger(h5_context handle, h5_instrument instrument)
         ctx->hihat_open = 0;
     } else if (instrument == H5_INSTR_TOM) {
         h5_voice_trigger(ctx, H5_VOICE_TOM);
+    } else if (instrument == H5_INSTR_SNARE) {
+        h5_voice_trigger(ctx, H5_VOICE_SNARE);
     }
 
     return H5_OK;

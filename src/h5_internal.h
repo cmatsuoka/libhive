@@ -204,6 +204,25 @@ struct h5_tom_s {
     uint8_t active;
 };
 
+/* Snare voice runtime state. */
+struct h5_snare_s {
+    struct h5_env_s env;       /* body AR^3: 1 ms attack, Decay release */
+    struct h5_env_s env_click; /* transient AR^10: 1 ms attack */
+    struct h5_noise_s noise;
+    struct h5_svf_s rattle[4]; /* four fixed band-pass resonators */
+    struct h5_svf_s out_filter; /* output low-pass at NoisePitch */
+    uint32_t phase;           /* 28-bit tone oscillator phase */
+    int32_t base_inc;         /* phase28 increment at TonePitch, no bend */
+    int32_t bend_q16;         /* pitch-envelope depth, semitones Q16 */
+    int32_t noise_pitch_q16;  /* output low-pass base cutoff */
+    int32_t tone_gain_q16;    /* 0.3 * (1 - NoiseTone)^0.7 */
+    int32_t noise_gain_q16;   /* NoiseTone^0.7 */
+    int32_t body_gain_q16;    /* (1 - Click)^0.7 */
+    int32_t click_gain_q16;   /* Click^0.7 */
+    int32_t sweep_q16;        /* filter-envelope contour depth */
+    uint8_t active;
+};
+
 /* The concrete context behind the opaque h5_context handle. */
 struct h5_context_s {
     uint32_t sample_rate;
@@ -223,6 +242,7 @@ struct h5_context_s {
 
     /* Voice runtime state, initialized by h5_voice_init_all(). */
     struct h5_tom_s tom;
+    struct h5_snare_s snare;
 };
 
 /* Tom engine. Times and controls are taken from the context's parameter
@@ -233,6 +253,13 @@ void h5_tom_configure(struct h5_tom_s *t,
     const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
 void h5_tom_trigger(struct h5_tom_s *t);
 int32_t h5_tom_process(struct h5_tom_s *t, uint32_t sample_rate);
+
+/* Snare engine. */
+void h5_snare_init(struct h5_snare_s *s, uint32_t sample_rate);
+void h5_snare_configure(struct h5_snare_s *s,
+    const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
+void h5_snare_trigger(struct h5_snare_s *s);
+int32_t h5_snare_process(struct h5_snare_s *s, uint32_t sample_rate);
 
 /* Voice helpers used by the lifecycle, parameter and render entry points. */
 void h5_voice_init_all(struct h5_context_s *ctx);

@@ -358,3 +358,301 @@ int command_tom(void)
     h5_destroy_context(ctx);
     return failures == 0 ? 0 : 1;
 }
+
+static void set_snare(h5_context ctx, h5_param param, int32_t value)
+{
+    h5_set_param(ctx, H5_VOICE_SNARE, param, value);
+}
+
+static int command_snare_hit(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 1500u);
+    const size_t check_start = frames_for_ms(TEST_RATE, 1200u);
+    int16_t *buffer;
+    size_t first, last;
+    int32_t peak, tail_peak;
+    unsigned crossings;
+
+    /* Standard snare tuning for the hit test. */
+    set_snare(ctx, H5_PARAM_TONE_PITCH, 130 * H5_Q16_ONE);
+    set_snare(ctx, H5_PARAM_NOISE_PITCH, 7000 * H5_Q16_ONE);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, 6 * H5_Q16_ONE / 10);
+    set_snare(ctx, H5_PARAM_BEND, 8 * H5_Q16_ONE);
+    set_snare(ctx, H5_PARAM_DECAY, 7 * H5_Q16_ONE / 10);
+
+    h5_trigger(ctx, H5_INSTR_SNARE);
+    buffer = render(ctx, frames);
+    if (buffer == 0) {
+        fail("out of memory");
+        return -1;
+    }
+
+    first = first_above(buffer, frames, 16);
+    last = last_above(buffer, frames, 16);
+    peak = peak_abs(buffer, 0u, frames);
+    tail_peak = peak_abs(buffer, check_start, frames);
+    crossings = zero_crossings(buffer, 0u, frames_for_ms(TEST_RATE, 100u));
+
+    if (first > frames_for_ms(TEST_RATE, 10u)) {
+        fail("the Snare hit does not start promptly");
+    } else {
+        ok("the Snare hit starts promptly");
+    }
+
+    if (tail_peak > 1) {
+        fail("the Snare default tail does not decay to silence");
+    } else {
+        ok("the Snare default tail decays to silence");
+    }
+
+    if (peak < 1000 || last <= first) {
+        fail("the Snare default hit is silent or degenerate");
+    } else {
+        ok("the Snare default hit is audible");
+    }
+
+    if (crossings < 5u || crossings > 3000u) {
+        fail("the Snare default timbre is outside the expected band");
+    } else {
+        ok("the Snare default timbre is in the expected band");
+    }
+
+    if (wav_write_stereo16("build/snare.wav", buffer, frames, TEST_RATE) != 0) {
+        fail("could not write build/snare.wav");
+    } else {
+        printf("ok  : wrote build/snare.wav (%lu frames)\n",
+            (unsigned long)frames);
+    }
+
+    free(buffer);
+    return 0;
+}
+
+static int command_snare_pitch(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 250u);
+    const size_t window = frames_for_ms(TEST_RATE, 150u);
+    int16_t *low;
+    int16_t *high;
+    unsigned zc_low, zc_high;
+
+    h5_reset(ctx);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_snare(ctx, H5_PARAM_BEND, 0);
+    set_snare(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
+    set_snare(ctx, H5_PARAM_TONE_PITCH, 100 * H5_Q16_ONE);
+    h5_trigger(ctx, H5_INSTR_SNARE);
+    low = render(ctx, frames);
+
+    h5_reset(ctx);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_snare(ctx, H5_PARAM_BEND, 0);
+    set_snare(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
+    set_snare(ctx, H5_PARAM_TONE_PITCH, 400 * H5_Q16_ONE);
+    h5_trigger(ctx, H5_INSTR_SNARE);
+    high = render(ctx, frames);
+
+    if (low == 0 || high == 0) {
+        fail("out of memory");
+        free(low);
+        free(high);
+        return -1;
+    }
+
+    zc_low = zero_crossings(low, 0u, window);
+    zc_high = zero_crossings(high, 0u, window);
+
+    if (zc_high < 2u * zc_low) {
+        fail("Snare TonePitch does not raise the tone frequency");
+    } else {
+        ok("Snare TonePitch raises the tone frequency");
+    }
+
+    free(low);
+    free(high);
+    return 0;
+}
+
+static int command_snare_decay(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 2000u);
+    int16_t *short_hit;
+    int16_t *long_hit;
+    size_t short_end, long_end;
+
+    h5_reset(ctx);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_snare(ctx, H5_PARAM_BEND, 0);
+    set_snare(ctx, H5_PARAM_DECAY, H5_Q16_ONE / 5);
+    h5_trigger(ctx, H5_INSTR_SNARE);
+    short_hit = render(ctx, frames);
+
+    h5_reset(ctx);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_snare(ctx, H5_PARAM_BEND, 0);
+    set_snare(ctx, H5_PARAM_DECAY, 3 * H5_Q16_ONE / 2);
+    h5_trigger(ctx, H5_INSTR_SNARE);
+    long_hit = render(ctx, frames);
+
+    if (short_hit == 0 || long_hit == 0) {
+        fail("out of memory");
+        free(short_hit);
+        free(long_hit);
+        return -1;
+    }
+
+    short_end = last_above(short_hit, frames, 8);
+    long_end = last_above(long_hit, frames, 8);
+
+    if (long_end <= short_end + frames_for_ms(TEST_RATE, 300u)) {
+        fail("Snare Decay does not lengthen the tail");
+    } else {
+        ok("Snare Decay lengthens the tail");
+    }
+
+    free(short_hit);
+    free(long_hit);
+    return 0;
+}
+
+static int command_snare_noise(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 250u);
+    const size_t window = frames_for_ms(TEST_RATE, 150u);
+    int16_t *tone;
+    int16_t *noise;
+    unsigned zc_tone, zc_noise;
+
+    h5_reset(ctx);
+    set_snare(ctx, H5_PARAM_TONE_PITCH, 200 * H5_Q16_ONE);
+    set_snare(ctx, H5_PARAM_BEND, 0);
+    set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, 0);
+    h5_trigger(ctx, H5_INSTR_SNARE);
+    tone = render(ctx, frames);
+
+    h5_reset(ctx);
+    set_snare(ctx, H5_PARAM_TONE_PITCH, 200 * H5_Q16_ONE);
+    set_snare(ctx, H5_PARAM_BEND, 0);
+    set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
+    h5_trigger(ctx, H5_INSTR_SNARE);
+    noise = render(ctx, frames);
+
+    if (tone == 0 || noise == 0) {
+        fail("out of memory");
+        free(tone);
+        free(noise);
+        return -1;
+    }
+
+    zc_tone = zero_crossings(tone, 0u, window);
+    zc_noise = zero_crossings(noise, 0u, window);
+
+    if (zc_noise < 2u * zc_tone) {
+        fail("Snare NoiseTone does not add high-frequency rattle");
+    } else {
+        ok("Snare NoiseTone adds high-frequency rattle");
+    }
+
+    /* The rattle path uses four narrow band-pass filters, so its total
+     * energy can be lower than a pure sine tone. Verify it is still audible
+     * and carries broadband high-frequency content. */
+    if (peak_abs(noise, 0u, window) < 100) {
+        fail("Snare rattle path is silent");
+    } else {
+        ok("Snare rattle path is audible");
+    }
+
+    free(tone);
+    free(noise);
+    return 0;
+}
+
+static int16_t *render_snare_variant(int32_t click, int32_t sweep,
+    size_t frames)
+{
+    h5_context ctx = h5_create_context(TEST_RATE);
+    int16_t *buffer;
+
+    if (ctx == 0) {
+        return 0;
+    }
+    h5_reset(ctx);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
+    set_snare(ctx, H5_PARAM_BEND, 0);
+    set_snare(ctx, H5_PARAM_DECAY, H5_Q16_ONE);
+    set_snare(ctx, H5_PARAM_CLICK_TONE, click);
+    set_snare(ctx, H5_PARAM_SWEEP, sweep);
+    h5_trigger(ctx, H5_INSTR_SNARE);
+    buffer = render(ctx, frames);
+    h5_destroy_context(ctx);
+    return buffer;
+}
+
+static int command_snare_controls(void)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 500u);
+    const size_t bytes = frames * 2u * sizeof(int16_t);
+    int16_t *a;
+    int16_t *b;
+
+    a = render_snare_variant(0, H5_Q16_ONE / 2, frames);
+    b = render_snare_variant(H5_Q16_ONE, H5_Q16_ONE / 2, frames);
+    if (a == 0 || b == 0) {
+        fail("out of memory");
+        free(a);
+        free(b);
+        return -1;
+    }
+    if (memcmp(a, b, bytes) == 0) {
+        fail("Snare Click does not change the output");
+    } else {
+        ok("Snare Click changes the output");
+    }
+    free(a);
+    free(b);
+
+    a = render_snare_variant(0, 0, frames);
+    b = render_snare_variant(0, H5_Q16_ONE, frames);
+    if (a == 0 || b == 0) {
+        fail("out of memory");
+        free(a);
+        free(b);
+        return -1;
+    }
+    if (memcmp(a, b, bytes) == 0) {
+        fail("Snare Sweep does not change the output");
+    } else {
+        ok("Snare Sweep changes the output");
+    }
+    free(a);
+    free(b);
+    return 0;
+}
+
+int command_snare(void)
+{
+    h5_context ctx = h5_create_context(TEST_RATE);
+
+    if (ctx == 0) {
+        fail("could not create a context");
+        return 1;
+    }
+
+    if (command_snare_hit(ctx) != 0 ||
+        command_snare_pitch(ctx) != 0 ||
+        command_snare_decay(ctx) != 0 ||
+        command_snare_noise(ctx) != 0 ||
+        command_snare_controls() != 0) {
+        h5_destroy_context(ctx);
+        return 1;
+    }
+
+    h5_destroy_context(ctx);
+    return failures == 0 ? 0 : 1;
+}

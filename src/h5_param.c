@@ -35,7 +35,7 @@ const struct h5_param_info h5_param_table[H5_VOICE_COUNT][H5_PARAM_COUNT] = {
         [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(1, 1), true },
         [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(7, 10), true },
         [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(7, 10), true },
-        [H5_PARAM_SWEEP]       = { 0,      0,        0,        false },
+        [H5_PARAM_SWEEP]       = { 0,      Q,        F(1, 2),  true },
         [H5_PARAM_BELL_CYMBAL] = { 0,      0,        0,        false },
     },
     [H5_VOICE_TOM] = {

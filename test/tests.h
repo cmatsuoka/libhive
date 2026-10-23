@@ -6,5 +6,6 @@
 #define TESTS_H
 
 int command_tom(void);
+int command_snare(void);
 
 #endif /* TESTS_H */

@@ -66,6 +66,7 @@ check: $(TEST)
 	./$(TEST) --silence $(BUILD)/silence.wav
 	./$(TEST) --api
 	./$(TEST) --tom
+	./$(TEST) --snare
 
 clean:
 	rm -rf $(BUILD) $(LIB) $(TEST)

@@ -9,6 +9,7 @@
  *   --api               verify the public API: context lifecycle, parameters,
  *                       mixer, triggers and render
  *   --tom               render a Tom hit and verify its controls
+ *   --snare             render a Snare hit and verify its controls
  *   --help              this text
  *
  * Exit status is 0 when every check passed, 1 otherwise.
@@ -323,6 +324,15 @@ static int command_api(void)
     } else {
         ok("h5_param_supported() rejects an invalid pair");
     }
+    if (!h5_param_supported(H5_VOICE_SNARE, H5_PARAM_SWEEP)) {
+        fail("h5_param_supported() wrongly reports Snare Sweep unsupported");
+    } else if (h5_get_param((h5_context)ctx, H5_VOICE_SNARE,
+            H5_PARAM_SWEEP, &value) != H5_OK ||
+        value != H5_Q16_ONE / 2) {
+        fail("Snare Sweep does not default to 0.5");
+    } else {
+        ok("Snare Sweep is supported with the default 0.5");
+    }
     if (h5_param_supported(H5_VOICE_COUNT, H5_PARAM_DECAY) ||
         h5_param_supported(H5_VOICE_KICK, H5_PARAM_COUNT)) {
         fail("h5_param_supported() did not reject out-of-range enums");
@@ -455,6 +465,7 @@ static void usage(const char *program)
         "  --api              verify the context lifecycle, parameters,\n"
         "                     mixer, triggers and render entry\n"
         "  --tom              render a Tom hit and verify its controls\n"
+        "  --snare            render a Snare hit and verify its controls\n"
         "  --help             this text\n");
 }
 
@@ -488,6 +499,9 @@ int main(int argc, char **argv)
     }
     if (strcmp(command, "--tom") == 0) {
         return command_tom();
+    }
+    if (strcmp(command, "--snare") == 0) {
+        return command_snare();
     }
     if (strcmp(command, "--help") == 0 || strcmp(command, "-h") == 0) {
         usage(argv[0]);
