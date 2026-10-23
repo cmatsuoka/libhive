@@ -8,5 +8,6 @@
 int command_kick(void);
 int command_tom(void);
 int command_snare(void);
+int command_mixer(void);
 
 #endif /* TESTS_H */

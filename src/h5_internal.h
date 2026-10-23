@@ -294,6 +294,20 @@ void h5_voice_init_all(struct h5_context_s *ctx);
 void h5_voice_reset_all(struct h5_context_s *ctx);
 void h5_voice_configure(struct h5_context_s *ctx, h5_voice voice);
 void h5_voice_trigger(struct h5_context_s *ctx, h5_voice voice);
+
+/* Map an instrument trigger to its voice. The instrument must be in range. */
+void h5_voice_trigger_instrument(struct h5_context_s *ctx,
+    h5_instrument instrument);
+
 int32_t h5_voice_process(struct h5_context_s *ctx, h5_voice voice);
+
+/* Add one instrument's mono Q31 output to the 64-bit stereo accumulators,
+ * applying its mixer volume and pan. */
+void h5_mix_add(const struct h5_context_s *ctx, h5_instrument instrument,
+    int32_t voice_out, int64_t *left, int64_t *right);
+
+/* Convert a completed 64-bit Q31 mix accumulator to Q15 with round-half-up
+ * and saturation. This is the single conversion in the output stage. */
+int16_t h5_mix_to_q15(int64_t sum);
 
 #endif /* HIVE_V_H5_INTERNAL_H */

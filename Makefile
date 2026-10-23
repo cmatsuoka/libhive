@@ -68,6 +68,7 @@ check: $(TEST)
 	./$(TEST) --kick
 	./$(TEST) --tom
 	./$(TEST) --snare
+	./$(TEST) --mixer
 
 clean:
 	rm -rf $(BUILD) $(LIB) $(TEST)

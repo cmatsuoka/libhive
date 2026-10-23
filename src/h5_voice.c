@@ -70,6 +70,30 @@ void h5_voice_trigger(struct h5_context_s *ctx, h5_voice voice)
     }
 }
 
+void h5_voice_trigger_instrument(struct h5_context_s *ctx,
+    h5_instrument instrument)
+{
+    switch (instrument) {
+    case H5_INSTR_KICK:
+        h5_voice_trigger(ctx, H5_VOICE_KICK);
+        break;
+    case H5_INSTR_SNARE:
+        h5_voice_trigger(ctx, H5_VOICE_SNARE);
+        break;
+    case H5_INSTR_TOM_1:
+        h5_voice_trigger(ctx, H5_VOICE_TOM_1);
+        break;
+    case H5_INSTR_TOM_2:
+        h5_voice_trigger(ctx, H5_VOICE_TOM_2);
+        break;
+    case H5_INSTR_TOM_3:
+        h5_voice_trigger(ctx, H5_VOICE_TOM_3);
+        break;
+    default:
+        break;
+    }
+}
+
 int32_t h5_voice_process(struct h5_context_s *ctx, h5_voice voice)
 {
     int tom = h5_tom_index(voice);

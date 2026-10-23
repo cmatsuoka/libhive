@@ -11,6 +11,7 @@
  *   --kick              render a Kick hit and verify its controls
  *   --tom               render a Tom hit and verify its controls
  *   --snare             render a Snare hit and verify its controls
+ *   --mixer             verify volume, pan and the stereo output stage
  *   --help              this text
  *
  * Exit status is 0 when every check passed, 1 otherwise.
@@ -514,6 +515,7 @@ static void usage(const char *program)
         "  --kick             render a Kick hit and verify its controls\n"
         "  --tom              render a Tom hit and verify its controls\n"
         "  --snare            render a Snare hit and verify its controls\n"
+        "  --mixer            verify volume, pan and the stereo output stage\n"
         "  --help             this text\n");
 }
 
@@ -553,6 +555,9 @@ int main(int argc, char **argv)
     }
     if (strcmp(command, "--snare") == 0) {
         return command_snare();
+    }
+    if (strcmp(command, "--mixer") == 0) {
+        return command_mixer();
     }
     if (strcmp(command, "--help") == 0 || strcmp(command, "-h") == 0) {
         usage(argv[0]);

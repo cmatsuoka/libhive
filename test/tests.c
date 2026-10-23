@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "h5.h"
+#include "h5_internal.h"
 #include "tests.h"
 #include "wav_writer.h"
 
@@ -1069,6 +1070,246 @@ int command_snare(void)
         command_snare_decay(ctx) != 0 ||
         command_snare_noise(ctx) != 0 ||
         command_snare_controls() != 0) {
+        h5_destroy_context(ctx);
+        return 1;
+    }
+
+    h5_destroy_context(ctx);
+    return failures == 0 ? 0 : 1;
+}
+
+static int16_t *render_with_mix(h5_context ctx, h5_instrument instrument,
+    int32_t volume, int32_t pan, size_t frames)
+{
+    h5_reset(ctx);
+    h5_set_instrument_volume(ctx, instrument, volume);
+    h5_set_instrument_pan(ctx, instrument, pan);
+    h5_trigger(ctx, instrument);
+    return render(ctx, frames);
+}
+
+static void channel_energies(const int16_t *buffer, size_t frames,
+    int64_t *left, int64_t *right)
+{
+    size_t i;
+
+    *left = 0;
+    *right = 0;
+    for (i = 0u; i < frames; i++) {
+        int32_t l = buffer[2u * i];
+        int32_t r = buffer[2u * i + 1u];
+
+        *left += (int64_t)l * l;
+        *right += (int64_t)r * r;
+    }
+}
+
+static int command_mixer_pan(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 300u);
+    int16_t *buffer;
+    int64_t left, right;
+    size_t i;
+    int equal = 1;
+
+    buffer = render_with_mix(ctx, H5_INSTR_TOM_1, H5_Q16_ONE, 0, frames);
+    if (buffer == 0) {
+        fail("out of memory");
+        return -1;
+    }
+    channel_energies(buffer, frames, &left, &right);
+    if (left == 0 || right != 0) {
+        fail("pan left does not send the voice to the left channel only");
+    } else {
+        ok("pan left sends the voice to the left channel only");
+    }
+    free(buffer);
+
+    buffer = render_with_mix(ctx, H5_INSTR_TOM_1, H5_Q16_ONE, H5_Q16_ONE,
+        frames);
+    if (buffer == 0) {
+        fail("out of memory");
+        return -1;
+    }
+    channel_energies(buffer, frames, &left, &right);
+    if (right == 0 || left != 0) {
+        fail("pan right does not send the voice to the right channel only");
+    } else {
+        ok("pan right sends the voice to the right channel only");
+    }
+    free(buffer);
+
+    buffer = render_with_mix(ctx, H5_INSTR_TOM_1, H5_Q16_ONE, H5_Q16_ONE / 2,
+        frames);
+    if (buffer == 0) {
+        fail("out of memory");
+        return -1;
+    }
+    channel_energies(buffer, frames, &left, &right);
+    for (i = 0u; i < frames; i++) {
+        if (buffer[2u * i] != buffer[2u * i + 1u]) {
+            equal = 0;
+            break;
+        }
+    }
+    if (left == 0 || !equal) {
+        fail("centre pan does not split the voice equally");
+    } else {
+        ok("centre pan splits the voice equally between both channels");
+    }
+    free(buffer);
+
+    return 0;
+}
+
+static int command_mixer_volume(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 300u);
+    int16_t *buffer;
+    int64_t silent_left, silent_right;
+    int64_t half_left, half_right;
+    int64_t full_left, full_right;
+
+    buffer = render_with_mix(ctx, H5_INSTR_TOM_1, 0, H5_Q16_ONE / 2, frames);
+    if (buffer == 0) {
+        fail("out of memory");
+        return -1;
+    }
+    channel_energies(buffer, frames, &silent_left, &silent_right);
+    if (silent_left != 0 || silent_right != 0) {
+        fail("volume zero does not silence the instrument");
+    } else {
+        ok("volume zero silences the instrument");
+    }
+    free(buffer);
+
+    buffer = render_with_mix(ctx, H5_INSTR_TOM_1, H5_Q16_ONE / 2,
+        H5_Q16_ONE / 2, frames);
+    if (buffer == 0) {
+        fail("out of memory");
+        return -1;
+    }
+    channel_energies(buffer, frames, &half_left, &half_right);
+    free(buffer);
+
+    buffer = render_with_mix(ctx, H5_INSTR_TOM_1, H5_Q16_ONE,
+        H5_Q16_ONE / 2, frames);
+    if (buffer == 0) {
+        fail("out of memory");
+        return -1;
+    }
+    channel_energies(buffer, frames, &full_left, &full_right);
+    free(buffer);
+
+    if (full_left <= half_left || full_right <= half_right) {
+        fail("volume one is not louder than volume one half");
+    } else {
+        ok("volume one is louder than volume one half");
+    }
+
+    return 0;
+}
+
+static int command_mixer_saturation(void)
+{
+    int ok_status = 1;
+
+    if (h5_mix_to_q15(0) != 0) {
+        fail("the output conversion does not preserve silence");
+        ok_status = 0;
+    }
+    if (h5_mix_to_q15((int64_t)12345 << 16) != 12345) {
+        fail("the output conversion does not preserve a Q15 sample");
+        ok_status = 0;
+    }
+    if (h5_mix_to_q15((int64_t)4 << 31) != 32767 ||
+        h5_mix_to_q15(-((int64_t)4 << 31)) != -32768) {
+        fail("the output conversion does not saturate the mix bus");
+        ok_status = 0;
+    }
+    if (ok_status) {
+        ok("the output conversion rounds and saturates once at the mix bus");
+    }
+    return ok_status ? 0 : -1;
+}
+
+static int command_mixer_render(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 800u);
+    const h5_instrument instruments[H5_INSTR_COUNT] = {
+        H5_INSTR_KICK, H5_INSTR_SNARE,
+        H5_INSTR_TOM_1, H5_INSTR_TOM_2, H5_INSTR_TOM_3
+    };
+    int64_t solo_energy[H5_INSTR_COUNT];
+    int64_t all_energy;
+    int16_t *buffer;
+    int result = 0;
+    size_t i;
+
+    for (i = 0u; i < (size_t)H5_INSTR_COUNT; i++) {
+        h5_reset(ctx);
+        h5_trigger(ctx, instruments[i]);
+        buffer = render(ctx, frames);
+        if (buffer == 0) {
+            fail("out of memory");
+            return -1;
+        }
+        solo_energy[i] = energy(buffer, 0u, frames);
+        if (peak_abs(buffer, 0u, frames) < 100) {
+            fail("an instrument is silent in its solo render");
+            result = -1;
+        }
+        free(buffer);
+    }
+
+    h5_reset(ctx);
+    for (i = 0u; i < (size_t)H5_INSTR_COUNT; i++) {
+        h5_trigger(ctx, instruments[i]);
+    }
+    buffer = render(ctx, frames);
+    if (buffer == 0) {
+        fail("out of memory");
+        return -1;
+    }
+
+    all_energy = energy(buffer, 0u, frames);
+    for (i = 0u; i < (size_t)H5_INSTR_COUNT; i++) {
+        if (all_energy <= solo_energy[i]) {
+            fail("the full kit mix is not louder than a solo instrument");
+            result = -1;
+            break;
+        }
+    }
+
+    if (result == 0) {
+        ok("all five instruments sum into one stereo mix");
+    }
+
+    if (wav_write_stereo16("build/mix.wav", buffer, frames, TEST_RATE) != 0) {
+        fail("could not write build/mix.wav");
+        result = -1;
+    } else {
+        printf("ok  : wrote build/mix.wav (%lu frames)\n",
+            (unsigned long)frames);
+    }
+
+    free(buffer);
+    return result;
+}
+
+int command_mixer(void)
+{
+    h5_context ctx = h5_create_context(TEST_RATE);
+
+    if (ctx == 0) {
+        fail("could not create a context");
+        return 1;
+    }
+
+    if (command_mixer_pan(ctx) != 0 ||
+        command_mixer_volume(ctx) != 0 ||
+        command_mixer_saturation() != 0 ||
+        command_mixer_render(ctx) != 0) {
         h5_destroy_context(ctx);
         return 1;
     }
