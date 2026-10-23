@@ -393,19 +393,21 @@ int32_t h5_tom_process(struct h5_tom_s *t, uint32_t sample_rate)
  *
  * Signal flow:
  *   f       = TonePitch * 2^(Bend * env / 12)
- *   s       = sin(2*pi*phi)
+ *   s       = sin(2*pi*phi), s2 = sin((pi/2)*s)
  *   rattle  = sum of 4 BP_SVF(u_hold; f_k, Q_k)
  *   body    = env^3 * (1-Click)^0.7
  *             * (0.3*(1-NoiseTone)^0.7 * s + NoiseTone^0.7 * rattle)
  *   click   = env_click^10 * Click^0.7 * rattle
  *   mix     = body + click
- *   y       = tanh(1.5 * mix)
+ *   half    = env^3 * (1-Click)^0.7 * 0.5*(s2 + s)
+ *   y       = tanh(1.5 * ((1-Drive)*mix + Drive*half))
  *   out     = LP_SVF(y; NoisePitch * sweep contour, Q) * Volume * Gain
  *
  * Sweep lowers the output cutoff as the body decays; at 0 the cutoff is
  * fixed, at 1 it falls by half the base cutoff over the release.
  *
  * Engine-only controls fixed at their documented defaults:
+ *   Drive          0.15
  *   Volume         0.50
  *   Gain           1.00
  *   Output Q       1.00
@@ -420,6 +422,7 @@ int32_t h5_tom_process(struct h5_tom_s *t, uint32_t sample_rate)
 #define H5_SNARE_CLICK_ATTACK_Q16 H5_MS_Q16(1)
 #define H5_SNARE_TONE_WEIGHT_Q16 (3 * H5_Q16_ONE / 10)
 #define H5_SNARE_SWEEP_DEPTH_Q16 (H5_Q16_ONE / 2)
+#define H5_SNARE_DRIVE_Q16       (15 * H5_Q16_ONE / 100)
 
 /* Four fixed band-pass resonators that shape the noise into a snare-wire
  * rattle. Frequencies and Q values are chosen to cover the typical snare
@@ -522,8 +525,9 @@ void h5_snare_trigger(struct h5_snare_s *sn)
 
 int32_t h5_snare_process(struct h5_snare_s *sn, uint32_t sample_rate)
 {
-    int32_t env, env_click, env3, semitones_q16, ratio, inc, s, u, tone;
-    int32_t rattle, sum, body, click, mix, sweep, cutoff, y, out;
+    int32_t env, env_click, env3, semitones_q16, ratio, inc, s, s2, u;
+    int32_t tone, rattle, sum, body, click, mix, half, blended;
+    int32_t sweep, cutoff, y, out;
     size_t i;
 
     if (!sn->active) {
@@ -551,6 +555,9 @@ int32_t h5_snare_process(struct h5_snare_s *sn, uint32_t sample_rate)
     sn->phase = (sn->phase + (uint32_t)inc) & 0x0FFFFFFFu;
 
     s = h5_sine_interp(sn->phase);
+    /* s2 = sin((pi/2) * s); a quarter of s's normalized value is 2^26 of a
+     * 28-bit phase, i.e. s >> 5 for a Q31 sample. */
+    s2 = h5_sine_interp((uint32_t)(s >> 5));
 
     /* Four band-pass filters on the held noise. */
     u = h5_noise_next(&sn->noise);
@@ -572,6 +579,14 @@ int32_t h5_snare_process(struct h5_snare_s *sn, uint32_t sample_rate)
     click = h5_mul_q30(click, h5_pow10_q30(env_click));
     mix = h5_sat_add_q31(body, click);
 
+    /* Sine-shaper branch: 0.5*(s2 + s), scaled by the body envelope and
+     * click law. The Drive control blends it into the mix before tanh. */
+    half = h5_mul_q30((int32_t)(((int64_t)s2 + (int64_t)s) / 2), env3);
+    half = h5_mul_q16(half, sn->body_gain_q16);
+    blended = h5_sat_add_q31(
+        h5_mul_q16(mix, H5_Q16_ONE - H5_SNARE_DRIVE_Q16),
+        h5_mul_q16(half, H5_SNARE_DRIVE_Q16));
+
     /* Sweep lowers the output cutoff as the body decays. The contour depth
      * is half the base cutoff at full Sweep. */
     sweep = h5_mul_q16(H5_SNARE_SWEEP_DEPTH_Q16, sn->sweep_q16);
@@ -580,7 +595,7 @@ int32_t h5_snare_process(struct h5_snare_s *sn, uint32_t sample_rate)
     h5_svf_tune(&sn->out_filter, H5_SVF_LP, cutoff, H5_SNARE_OUT_Q16,
         sample_rate);
 
-    y = h5_softclip_q31(mix);
+    y = h5_softclip_q31(blended);
 
     out = h5_svf_run(&sn->out_filter, y);
     out = h5_mul_q16(out, H5_SNARE_VOLUME_Q16);
