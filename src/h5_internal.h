@@ -250,14 +250,11 @@ struct h5_snare_s {
 struct h5_context_s {
     uint32_t sample_rate;
 
-    /* Per-voice public parameters, stored as Q16.16 physical values. */
+    /* Per-voice public parameters, stored as Q16.16 physical values. The
+     * mixer controls Volume and Pan live here too; the mixer reads
+     * voice_params[instrument][H5_PARAM_VOLUME] and [H5_PARAM_PAN] at
+     * render time. */
     int32_t voice_params[H5_VOICE_COUNT][H5_PARAM_COUNT];
-
-    /* Per-instrument mixer state, Q16.16. */
-    struct {
-        int32_t volume;
-        int32_t pan;
-    } instr[H5_INSTR_COUNT];
 
     /* Voice runtime state, initialized by h5_voice_init_all(). The Toms are
      * three independent instances of the same engine. */

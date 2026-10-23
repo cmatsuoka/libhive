@@ -21,17 +21,11 @@ static void h5_init_defaults(struct h5_context_s *ctx)
 {
     h5_voice v;
     h5_param p;
-    h5_instrument i;
 
     for (v = 0; v < H5_VOICE_COUNT; v++) {
         for (p = 0; p < H5_PARAM_COUNT; p++) {
             ctx->voice_params[v][p] = h5_param_table[v][p].default_value;
         }
-    }
-
-    for (i = 0; i < H5_INSTR_COUNT; i++) {
-        ctx->instr[i].volume = H5_Q16_ONE / 2;
-        ctx->instr[i].pan = H5_Q16_ONE / 2;
     }
 }
 
@@ -124,91 +118,29 @@ void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
 h5_status h5_set_instrument_volume(h5_context handle, h5_instrument instrument,
     int32_t volume_q16)
 {
-    struct h5_context_s *ctx = (struct h5_context_s *)handle;
-    int32_t clamped;
-    h5_status status;
-
-    if (ctx == 0) {
-        return H5_ERR_INVALID_CONTEXT;
-    }
-    if ((unsigned)instrument >= (unsigned)H5_INSTR_COUNT) {
-        return H5_ERR_INVALID_INSTRUMENT;
-    }
-
-    clamped = volume_q16;
-    status = H5_OK;
-    if (clamped < 0) {
-        clamped = 0;
-        status = H5_ERR_RANGE;
-    } else if (clamped > H5_Q16_ONE) {
-        clamped = H5_Q16_ONE;
-        status = H5_ERR_RANGE;
-    }
-
-    ctx->instr[instrument].volume = clamped;
-    return status;
+    return h5_set_param(handle, (h5_voice)instrument, H5_PARAM_VOLUME,
+        volume_q16);
 }
 
 h5_status h5_set_instrument_pan(h5_context handle, h5_instrument instrument,
     int32_t pan_q16)
 {
-    struct h5_context_s *ctx = (struct h5_context_s *)handle;
-    int32_t clamped;
-    h5_status status;
-
-    if (ctx == 0) {
-        return H5_ERR_INVALID_CONTEXT;
-    }
-    if ((unsigned)instrument >= (unsigned)H5_INSTR_COUNT) {
-        return H5_ERR_INVALID_INSTRUMENT;
-    }
-
-    clamped = pan_q16;
-    status = H5_OK;
-    if (clamped < 0) {
-        clamped = 0;
-        status = H5_ERR_RANGE;
-    } else if (clamped > H5_Q16_ONE) {
-        clamped = H5_Q16_ONE;
-        status = H5_ERR_RANGE;
-    }
-
-    ctx->instr[instrument].pan = clamped;
-    return status;
+    return h5_set_param(handle, (h5_voice)instrument, H5_PARAM_PAN,
+        pan_q16);
 }
 
 h5_status h5_get_instrument_volume(const h5_context handle,
     h5_instrument instrument,
     int32_t *out)
 {
-    const struct h5_context_s *ctx = (const struct h5_context_s *)handle;
-
-    if (ctx == 0 || out == 0) {
-        return H5_ERR_INVALID_CONTEXT;
-    }
-    if ((unsigned)instrument >= (unsigned)H5_INSTR_COUNT) {
-        return H5_ERR_INVALID_INSTRUMENT;
-    }
-
-    *out = ctx->instr[instrument].volume;
-    return H5_OK;
+    return h5_get_param(handle, (h5_voice)instrument, H5_PARAM_VOLUME, out);
 }
 
 h5_status h5_get_instrument_pan(const h5_context handle,
     h5_instrument instrument,
     int32_t *out)
 {
-    const struct h5_context_s *ctx = (const struct h5_context_s *)handle;
-
-    if (ctx == 0 || out == 0) {
-        return H5_ERR_INVALID_CONTEXT;
-    }
-    if ((unsigned)instrument >= (unsigned)H5_INSTR_COUNT) {
-        return H5_ERR_INVALID_INSTRUMENT;
-    }
-
-    *out = ctx->instr[instrument].pan;
-    return H5_OK;
+    return h5_get_param(handle, (h5_voice)instrument, H5_PARAM_PAN, out);
 }
 
 h5_status h5_trigger(h5_context handle, h5_instrument instrument)

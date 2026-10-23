@@ -26,6 +26,8 @@ const struct h5_param_info h5_param_table[H5_VOICE_COUNT][H5_PARAM_COUNT] = {
         [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(9, 10), true },
         [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(1, 2),  true },
         [H5_PARAM_SWEEP]       = { 0,      0,        0,        false },
+        [H5_PARAM_VOLUME]      = { 0,      Q,        Q / 2,    true },
+        [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
     },
     [H5_VOICE_SNARE] = {
         [H5_PARAM_NOISE_PITCH] = { I(900), I(14000), I(10000), true },
@@ -35,6 +37,8 @@ const struct h5_param_info h5_param_table[H5_VOICE_COUNT][H5_PARAM_COUNT] = {
         [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(7, 10), true },
         [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(7, 10), true },
         [H5_PARAM_SWEEP]       = { 0,      Q,        F(1, 2),  true },
+        [H5_PARAM_VOLUME]      = { 0,      Q,        Q / 2,    true },
+        [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
     },
     [H5_VOICE_TOM_1] = {
         [H5_PARAM_NOISE_PITCH] = { I(900), I(11000), I(11000), true },
@@ -44,6 +48,8 @@ const struct h5_param_info h5_param_table[H5_VOICE_COUNT][H5_PARAM_COUNT] = {
         [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(7, 10), true },
         [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(7, 10), true },
         [H5_PARAM_SWEEP]       = { 0,      0,        0,        false },
+        [H5_PARAM_VOLUME]      = { 0,      Q,        Q / 2,    true },
+        [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
     },
     [H5_VOICE_TOM_2] = {
         [H5_PARAM_NOISE_PITCH] = { I(900), I(11000), I(11000), true },
@@ -53,6 +59,8 @@ const struct h5_param_info h5_param_table[H5_VOICE_COUNT][H5_PARAM_COUNT] = {
         [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(7, 10), true },
         [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(7, 10), true },
         [H5_PARAM_SWEEP]       = { 0,      0,        0,        false },
+        [H5_PARAM_VOLUME]      = { 0,      Q,        Q / 2,    true },
+        [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
     },
     [H5_VOICE_TOM_3] = {
         [H5_PARAM_NOISE_PITCH] = { I(900), I(11000), I(11000), true },
@@ -62,6 +70,8 @@ const struct h5_param_info h5_param_table[H5_VOICE_COUNT][H5_PARAM_COUNT] = {
         [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(7, 10), true },
         [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(7, 10), true },
         [H5_PARAM_SWEEP]       = { 0,      0,        0,        false },
+        [H5_PARAM_VOLUME]      = { 0,      Q,        Q / 2,    true },
+        [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
     },
 };
 
@@ -99,7 +109,9 @@ h5_status h5_set_param(h5_context handle, h5_voice voice, h5_param param,
     }
 
     ctx->voice_params[voice][param] = clamped;
-    h5_voice_configure(ctx, voice);
+    if (param != H5_PARAM_VOLUME && param != H5_PARAM_PAN) {
+        h5_voice_configure(ctx, voice);
+    }
     return status;
 }
 

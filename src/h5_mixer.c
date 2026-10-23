@@ -11,8 +11,9 @@
 void h5_mix_add(const struct h5_context_s *ctx, h5_instrument instrument,
     int32_t voice_out, int64_t *left, int64_t *right)
 {
-    const int32_t pan = ctx->instr[instrument].pan;
-    int32_t mono = h5_mul_q16(voice_out, ctx->instr[instrument].volume);
+    const int32_t volume = ctx->voice_params[instrument][H5_PARAM_VOLUME];
+    const int32_t pan = ctx->voice_params[instrument][H5_PARAM_PAN];
+    int32_t mono = h5_mul_q16(voice_out, volume);
 
     *left += h5_mul_q16(mono, H5_Q16_ONE - pan);
     *right += h5_mul_q16(mono, pan);

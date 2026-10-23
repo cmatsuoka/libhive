@@ -55,7 +55,8 @@ typedef enum {
 
 /* Public sound parameters. The standard drum voices (Kick, Snare, Tom 1,
  * Tom 2, Tom 3) share the six faceplate controls Noise, Tone, Bend, Decay,
- * Noise/Tone and Click/Drum. Sweep is exposed for the Snare. Not every
+ * Noise/Tone and Click/Drum. Sweep is exposed for the Snare. Volume and Pan
+ * are the per-voice mixer controls, supported on every voice. Not every
  * parameter applies to every voice; h5_param_supported() reports the supported
  * pairs. */
 typedef enum {
@@ -66,6 +67,8 @@ typedef enum {
     H5_PARAM_NOISE_TONE,
     H5_PARAM_CLICK_TONE,
     H5_PARAM_SWEEP,
+    H5_PARAM_VOLUME,
+    H5_PARAM_PAN,
     H5_PARAM_COUNT
 } h5_param;
 
@@ -130,9 +133,11 @@ h5_status h5_get_param(const h5_context ctx,
  * surface for that voice. */
 bool h5_param_supported(h5_voice voice, h5_param param);
 
-/* Set the per-instrument mixer volume. Range is 0 .. H5_Q16_ONE.
- * Out-of-range values are clamped to that range, the clamped value is
- * stored, and H5_ERR_RANGE is returned. */
+/* Set the per-instrument mixer volume. Range is 0 .. H5_Q16_ONE;
+ * out-of-range values are clamped to that range, the clamped value is
+ * stored, and H5_ERR_RANGE is returned. Equivalent to
+ * h5_set_param(ctx, (h5_voice)instrument, H5_PARAM_VOLUME, volume_q16),
+ * kept as a function (not a macro) so arguments stay type-checked. */
 h5_status h5_set_instrument_volume(h5_context ctx,
     h5_instrument instrument,
     int32_t volume_q16);
@@ -140,19 +145,22 @@ h5_status h5_set_instrument_volume(h5_context ctx,
 /* Set the per-instrument mixer pan. Range is 0 .. H5_Q16_ONE;
  * 0 = left, H5_Q16_ONE / 2 = centre, H5_Q16_ONE = right. Out-of-range
  * values are clamped to that range, the clamped value is stored, and
- * H5_ERR_RANGE is returned. */
+ * H5_ERR_RANGE is returned. Equivalent to
+ * h5_set_param(ctx, (h5_voice)instrument, H5_PARAM_PAN, pan_q16). */
 h5_status h5_set_instrument_pan(h5_context ctx,
     h5_instrument instrument,
     int32_t pan_q16);
 
 /* Read back the per-instrument volume in Q16.16. A null *out is rejected
- * with H5_ERR_INVALID_CONTEXT. */
+ * with H5_ERR_INVALID_CONTEXT. Equivalent to h5_get_param() on
+ * H5_PARAM_VOLUME. */
 h5_status h5_get_instrument_volume(const h5_context ctx,
     h5_instrument instrument,
     int32_t *out);
 
 /* Read back the per-instrument pan in Q16.16. A null *out is rejected
- * with H5_ERR_INVALID_CONTEXT. */
+ * with H5_ERR_INVALID_CONTEXT. Equivalent to h5_get_param() on
+ * H5_PARAM_PAN. */
 h5_status h5_get_instrument_pan(const h5_context ctx,
     h5_instrument instrument,
     int32_t *out);

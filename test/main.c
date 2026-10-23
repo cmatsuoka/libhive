@@ -396,10 +396,26 @@ static int command_api(void)
         ok("h5_set_instrument_pan() / h5_get_instrument_pan() round trip");
     }
 
+    /* The mixer controls are ordinary parameters: h5_set_param() writes
+     * them and the instrument getters read them back. */
+    status = h5_set_param((h5_context)ctx, H5_VOICE_SNARE, H5_PARAM_VOLUME,
+        H5_Q16_ONE / 4);
+    if (status != H5_OK) {
+        fail("h5_set_param() did not accept the mixer Volume parameter");
+    }
+    status = h5_get_instrument_volume((h5_context)ctx, H5_INSTR_SNARE, &value);
+    if (status != H5_OK || value != H5_Q16_ONE / 4) {
+        fail("a volume written by h5_set_param() is not visible through"
+            " h5_get_instrument_volume()");
+    } else {
+        ok("the mixer controls are settable via h5_set_param()");
+    }
+
     /* Mixer clamping. */
     status = h5_set_instrument_volume((h5_context)ctx, H5_INSTR_TOM_1,
         -H5_Q16_ONE);
-    if (status != H5_ERR_RANGE || ctx->instr[H5_INSTR_TOM_1].volume != 0) {
+    if (status != H5_ERR_RANGE ||
+        ctx->voice_params[H5_VOICE_TOM_1][H5_PARAM_VOLUME] != 0) {
         fail("h5_set_instrument_volume() did not clamp a negative value");
     } else {
         ok("h5_set_instrument_volume() clamps negative values to zero");
@@ -408,7 +424,7 @@ static int command_api(void)
     status = h5_set_instrument_pan((h5_context)ctx, H5_INSTR_TOM_3,
         2 * H5_Q16_ONE);
     if (status != H5_ERR_RANGE ||
-        ctx->instr[H5_INSTR_TOM_3].pan != H5_Q16_ONE) {
+        ctx->voice_params[H5_VOICE_TOM_3][H5_PARAM_PAN] != H5_Q16_ONE) {
         fail("h5_set_instrument_pan() did not clamp a value above one");
     } else {
         ok("h5_set_instrument_pan() clamps values above one");
@@ -416,8 +432,9 @@ static int command_api(void)
 
     /* h5_reset() restores mixer defaults. */
     h5_reset((h5_context)ctx);
-    if (ctx->instr[H5_INSTR_KICK].volume != H5_Q16_ONE / 2 ||
-        ctx->instr[H5_INSTR_SNARE].pan != H5_Q16_ONE / 2) {
+    if (ctx->voice_params[H5_VOICE_KICK][H5_PARAM_VOLUME]
+            != H5_Q16_ONE / 2 ||
+        ctx->voice_params[H5_VOICE_SNARE][H5_PARAM_PAN] != H5_Q16_ONE / 2) {
         fail("h5_reset() did not restore mixer defaults");
     } else {
         ok("h5_reset() restores mixer defaults");
