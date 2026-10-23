@@ -138,7 +138,7 @@ static void set_tom_voice(h5_context ctx, h5_voice voice, h5_param param,
 static void configure_tom_for_mix(h5_context ctx, h5_voice voice,
     int32_t pitch_hz)
 {
-    set_tom_voice(ctx, voice, H5_PARAM_NOISE_TONE, 0);
+    set_tom_voice(ctx, voice, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_tom_voice(ctx, voice, H5_PARAM_CLICK_TONE, 0);
     set_tom_voice(ctx, voice, H5_PARAM_BEND, 0);
     set_tom_voice(ctx, voice, H5_PARAM_DECAY, H5_Q16_ONE);
@@ -219,7 +219,7 @@ static int command_tom_pitch(h5_context ctx)
     unsigned zc_low, zc_high;
 
     h5_reset(ctx);
-    set_tom(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_tom(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_CLICK_TONE, 0);
     set_tom(ctx, H5_PARAM_BEND, 0);
     set_tom(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
@@ -228,7 +228,7 @@ static int command_tom_pitch(h5_context ctx)
     low = render(ctx, frames);
 
     h5_reset(ctx);
-    set_tom(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_tom(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_CLICK_TONE, 0);
     set_tom(ctx, H5_PARAM_BEND, 0);
     set_tom(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
@@ -265,7 +265,7 @@ static int command_tom_decay(h5_context ctx)
     size_t short_end, long_end;
 
     h5_reset(ctx);
-    set_tom(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_tom(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_CLICK_TONE, 0);
     set_tom(ctx, H5_PARAM_BEND, 0);
     set_tom(ctx, H5_PARAM_DECAY, H5_Q16_ONE / 5);
@@ -273,7 +273,7 @@ static int command_tom_decay(h5_context ctx)
     short_hit = render(ctx, frames);
 
     h5_reset(ctx);
-    set_tom(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_tom(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_CLICK_TONE, 0);
     set_tom(ctx, H5_PARAM_BEND, 0);
     set_tom(ctx, H5_PARAM_DECAY, 3 * H5_Q16_ONE / 2);
@@ -312,7 +312,7 @@ static int command_tom_noise(h5_context ctx)
     h5_reset(ctx);
     set_tom(ctx, H5_PARAM_TONE_PITCH, 200 * H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_BEND, 0);
-    set_tom(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_tom(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_CLICK_TONE, 0);
     h5_trigger(ctx, H5_INSTR_TOM_2);
     tone = render(ctx, frames);
@@ -320,7 +320,7 @@ static int command_tom_noise(h5_context ctx)
     h5_reset(ctx);
     set_tom(ctx, H5_PARAM_TONE_PITCH, 200 * H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_BEND, 0);
-    set_tom(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
+    set_tom(ctx, H5_PARAM_NOISE_TONE, 0);
     set_tom(ctx, H5_PARAM_CLICK_TONE, 0);
     h5_trigger(ctx, H5_INSTR_TOM_2);
     noise = render(ctx, frames);
@@ -341,13 +341,13 @@ static int command_tom_noise(h5_context ctx)
         ok("Tom NoiseTone adds high-frequency noise");
     }
 
-    /* The noise path has full weight and the tone path a 0.3 headroom
-     * factor, so a fully noise-weighted hit must carry at least as much
-     * energy as a fully tone-weighted hit. */
-    if (energy(noise, 0u, window) <= energy(tone, 0u, window)) {
-        fail("Tom noise path is quieter than the tone path");
+    /* NoiseTone is the tone amount; the noise side carries the 0.3
+     * headroom factor, so a fully tone-weighted hit is at least as loud as a
+     * fully noise-weighted hit. */
+    if (energy(tone, 0u, window) <= energy(noise, 0u, window)) {
+        fail("Tom tone path is quieter than the noise path");
     } else {
-        ok("Tom noise path is not quieter than the tone path");
+        ok("Tom tone path is not quieter than the noise path");
     }
 
     free(tone);
@@ -537,7 +537,7 @@ static int command_kick_pitch(h5_context ctx)
     unsigned zc_low, zc_high;
 
     h5_reset(ctx);
-    set_kick(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_kick(ctx, H5_PARAM_CLICK_TONE, 0);
     set_kick(ctx, H5_PARAM_BEND, 0);
     set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
@@ -546,7 +546,7 @@ static int command_kick_pitch(h5_context ctx)
     low = render(ctx, frames);
 
     h5_reset(ctx);
-    set_kick(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_kick(ctx, H5_PARAM_CLICK_TONE, 0);
     set_kick(ctx, H5_PARAM_BEND, 0);
     set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
@@ -584,7 +584,7 @@ static int command_kick_bend(h5_context ctx)
     unsigned zc_flat, zc_fall;
 
     h5_reset(ctx);
-    set_kick(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_kick(ctx, H5_PARAM_CLICK_TONE, 0);
     set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
     set_kick(ctx, H5_PARAM_TONE_PITCH, 30 * H5_Q16_ONE);
@@ -593,7 +593,7 @@ static int command_kick_bend(h5_context ctx)
     flat = render(ctx, frames);
 
     h5_reset(ctx);
-    set_kick(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_kick(ctx, H5_PARAM_CLICK_TONE, 0);
     set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
     set_kick(ctx, H5_PARAM_TONE_PITCH, 30 * H5_Q16_ONE);
@@ -675,13 +675,15 @@ static int command_kick_noise(h5_context ctx)
     unsigned zc_tone, zc_noise;
 
     /* The noise path is gated by Click^0.7 as well as NoiseTone, so keep a
-     * non-zero Click to compare the two balance extremes. */
+     * non-zero Click to compare the two balance extremes. The noise attack is
+     * 0.2*Decay + 0.1 s, so keep Decay short enough that the noise is already
+     * present inside the analysis window (0.3 s is the Kick preset default). */
     h5_reset(ctx);
     set_kick(ctx, H5_PARAM_TONE_PITCH, 60 * H5_Q16_ONE);
     set_kick(ctx, H5_PARAM_BEND, 0);
     set_kick(ctx, H5_PARAM_CLICK_TONE, H5_Q16_ONE / 2);
-    set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
-    set_kick(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_kick(ctx, H5_PARAM_DECAY, 3 * H5_Q16_ONE / 10);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     h5_trigger(ctx, H5_INSTR_KICK);
     tone = render(ctx, frames);
 
@@ -689,8 +691,8 @@ static int command_kick_noise(h5_context ctx)
     set_kick(ctx, H5_PARAM_TONE_PITCH, 60 * H5_Q16_ONE);
     set_kick(ctx, H5_PARAM_BEND, 0);
     set_kick(ctx, H5_PARAM_CLICK_TONE, H5_Q16_ONE / 2);
-    set_kick(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
-    set_kick(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
+    set_kick(ctx, H5_PARAM_DECAY, 3 * H5_Q16_ONE / 10);
+    set_kick(ctx, H5_PARAM_NOISE_TONE, 0);
     h5_trigger(ctx, H5_INSTR_KICK);
     noise = render(ctx, frames);
 
@@ -858,7 +860,7 @@ static int command_snare_pitch(h5_context ctx)
     unsigned zc_low, zc_high;
 
     h5_reset(ctx);
-    set_snare(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
     set_snare(ctx, H5_PARAM_BEND, 0);
     set_snare(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
@@ -867,7 +869,7 @@ static int command_snare_pitch(h5_context ctx)
     low = render(ctx, frames);
 
     h5_reset(ctx);
-    set_snare(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
     set_snare(ctx, H5_PARAM_BEND, 0);
     set_snare(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
@@ -904,7 +906,7 @@ static int command_snare_decay(h5_context ctx)
     size_t short_end, long_end;
 
     h5_reset(ctx);
-    set_snare(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
     set_snare(ctx, H5_PARAM_BEND, 0);
     set_snare(ctx, H5_PARAM_DECAY, H5_Q16_ONE / 5);
@@ -912,7 +914,7 @@ static int command_snare_decay(h5_context ctx)
     short_hit = render(ctx, frames);
 
     h5_reset(ctx);
-    set_snare(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
     set_snare(ctx, H5_PARAM_BEND, 0);
     set_snare(ctx, H5_PARAM_DECAY, 3 * H5_Q16_ONE / 2);
@@ -952,7 +954,7 @@ static int command_snare_noise(h5_context ctx)
     set_snare(ctx, H5_PARAM_TONE_PITCH, 200 * H5_Q16_ONE);
     set_snare(ctx, H5_PARAM_BEND, 0);
     set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
-    set_snare(ctx, H5_PARAM_NOISE_TONE, 0);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     h5_trigger(ctx, H5_INSTR_SNARE);
     tone = render(ctx, frames);
 
@@ -960,7 +962,7 @@ static int command_snare_noise(h5_context ctx)
     set_snare(ctx, H5_PARAM_TONE_PITCH, 200 * H5_Q16_ONE);
     set_snare(ctx, H5_PARAM_BEND, 0);
     set_snare(ctx, H5_PARAM_CLICK_TONE, 0);
-    set_snare(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
+    set_snare(ctx, H5_PARAM_NOISE_TONE, 0);
     h5_trigger(ctx, H5_INSTR_SNARE);
     noise = render(ctx, frames);
 

@@ -41,7 +41,7 @@ const struct h5_param_info h5_param_table[H5_VOICE_COUNT][H5_PARAM_COUNT] = {
         [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
     },
     [H5_VOICE_TOM_1] = {
-        [H5_PARAM_NOISE_PITCH] = { I(900), I(11000), I(11000), true },
+        [H5_PARAM_NOISE_PITCH] = { I(900), I(16000), I(11000), true },
         [H5_PARAM_TONE_PITCH]  = { I(28),  I(880),   F(661, 2),    true },
         [H5_PARAM_BEND]        = { I(-62), I(62),    I(20),    true },
         [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(1, 1), true },
@@ -52,7 +52,7 @@ const struct h5_param_info h5_param_table[H5_VOICE_COUNT][H5_PARAM_COUNT] = {
         [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
     },
     [H5_VOICE_TOM_2] = {
-        [H5_PARAM_NOISE_PITCH] = { I(900), I(11000), I(11000), true },
+        [H5_PARAM_NOISE_PITCH] = { I(900), I(16000), I(11000), true },
         [H5_PARAM_TONE_PITCH]  = { I(28),  I(880),   F(1897, 10), true },
         [H5_PARAM_BEND]        = { I(-62), I(62),    I(20),    true },
         [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(1, 1), true },
@@ -63,7 +63,7 @@ const struct h5_param_info h5_param_table[H5_VOICE_COUNT][H5_PARAM_COUNT] = {
         [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
     },
     [H5_VOICE_TOM_3] = {
-        [H5_PARAM_NOISE_PITCH] = { I(900), I(11000), I(11000), true },
+        [H5_PARAM_NOISE_PITCH] = { I(900), I(16000), I(11000), true },
         [H5_PARAM_TONE_PITCH]  = { I(28),  I(880),   F(1144, 10), true },
         [H5_PARAM_BEND]        = { I(-62), I(62),    I(20),    true },
         [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(1, 1), true },

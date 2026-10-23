@@ -47,7 +47,7 @@ OPENAL_CFLAGS := $(shell pkg-config --cflags openal 2>/dev/null)
 OPENAL_LIBS   := $(shell pkg-config --libs openal 2>/dev/null || echo -lopenal)
 
 
-.PHONY: all check example clean
+.PHONY: all check example play_keys clean
 
 all: $(LIB)
 
@@ -70,7 +70,9 @@ $(BUILD)/examples/%.o: examples/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(LIB_CFLAGS) -c -o $@ $<
 
-example: $(EXAMPLE)
+example: play_keys
+
+play_keys: $(EXAMPLE)
 
 $(EXAMPLE): $(BUILD)/examples/play_keys.o $(LIB)
 	$(CC) $(TEST_CFLAGS) -o $@ $< -L. -lhive $(OPENAL_LIBS)
