@@ -6,7 +6,7 @@
  *   D - Snare
  *   O - Tom 1
  *   I - Tom 2
- *   P - Tom 3
+ *   U - Tom 3
  *   Q or Esc - quit
  *
  * Audio is streamed through OpenAL as a queue of short buffers. Four 256-frame
@@ -105,7 +105,7 @@ static int handle_key(h5_context kit, int key)
     case 'i':
         (void)h5_trigger(kit, H5_INSTR_TOM_2);
         break;
-    case 'p':
+    case 'u':
         (void)h5_trigger(kit, H5_INSTR_TOM_3);
         break;
     case 'q':

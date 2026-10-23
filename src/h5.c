@@ -98,17 +98,28 @@ void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
     for (i = 0u; i < frames; i++) {
         int64_t left = 0;
         int64_t right = 0;
+        int32_t out;
 
-        h5_mix_add(ctx, H5_INSTR_KICK,
-            h5_voice_process(ctx, H5_VOICE_KICK), &left, &right);
-        h5_mix_add(ctx, H5_INSTR_SNARE,
-            h5_voice_process(ctx, H5_VOICE_SNARE), &left, &right);
-        h5_mix_add(ctx, H5_INSTR_TOM_1,
-            h5_voice_process(ctx, H5_VOICE_TOM_1), &left, &right);
-        h5_mix_add(ctx, H5_INSTR_TOM_2,
-            h5_voice_process(ctx, H5_VOICE_TOM_2), &left, &right);
-        h5_mix_add(ctx, H5_INSTR_TOM_3,
-            h5_voice_process(ctx, H5_VOICE_TOM_3), &left, &right);
+        out = h5_voice_process(ctx, H5_VOICE_KICK);
+        if (out != 0) {
+            h5_mix_add(ctx, H5_INSTR_KICK, out, &left, &right);
+        }
+        out = h5_voice_process(ctx, H5_VOICE_SNARE);
+        if (out != 0) {
+            h5_mix_add(ctx, H5_INSTR_SNARE, out, &left, &right);
+        }
+        out = h5_voice_process(ctx, H5_VOICE_TOM_1);
+        if (out != 0) {
+            h5_mix_add(ctx, H5_INSTR_TOM_1, out, &left, &right);
+        }
+        out = h5_voice_process(ctx, H5_VOICE_TOM_2);
+        if (out != 0) {
+            h5_mix_add(ctx, H5_INSTR_TOM_2, out, &left, &right);
+        }
+        out = h5_voice_process(ctx, H5_VOICE_TOM_3);
+        if (out != 0) {
+            h5_mix_add(ctx, H5_INSTR_TOM_3, out, &left, &right);
+        }
 
         stereo_out[2u * i] = h5_mix_to_q15(left);
         stereo_out[2u * i + 1u] = h5_mix_to_q15(right);
