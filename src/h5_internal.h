@@ -259,10 +259,6 @@ struct h5_context_s {
         int32_t pan;
     } instr[H5_INSTR_COUNT];
 
-    /* Hi-hat open/closed gate. Set by h5_trigger(); used by the Hi-hat
-     * engine once voices are implemented. */
-    uint8_t hihat_open;
-
     /* Voice runtime state, initialized by h5_voice_init_all(). The Toms are
      * three independent instances of the same engine. */
     struct h5_kick_s kick;

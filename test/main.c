@@ -404,10 +404,10 @@ static int command_api(void)
         ok("h5_set_instrument_volume() clamps negative values to zero");
     }
 
-    status = h5_set_instrument_pan((h5_context)ctx, H5_INSTR_CYMBAL,
+    status = h5_set_instrument_pan((h5_context)ctx, H5_INSTR_TOM_3,
         2 * H5_Q16_ONE);
     if (status != H5_ERR_RANGE ||
-        ctx->instr[H5_INSTR_CYMBAL].pan != H5_Q16_ONE) {
+        ctx->instr[H5_INSTR_TOM_3].pan != H5_Q16_ONE) {
         fail("h5_set_instrument_pan() did not clamp a value above one");
     } else {
         ok("h5_set_instrument_pan() clamps values above one");
@@ -460,7 +460,7 @@ static int command_api(void)
         ok("the Tom voices keep independent parameter storage");
     }
 
-    /* Trigger validation and hi-hat gate state. */
+    /* Trigger validation. */
     status = h5_trigger((h5_context)ctx, H5_INSTR_KICK);
     if (status != H5_OK) {
         fail("h5_trigger(Kick) did not return OK");
@@ -473,20 +473,6 @@ static int command_api(void)
         fail("h5_trigger() did not reject an invalid instrument");
     } else {
         ok("h5_trigger() rejects an invalid instrument");
-    }
-
-    status = h5_trigger((h5_context)ctx, H5_INSTR_HIHAT_OPEN);
-    if (status != H5_OK || ctx->hihat_open != 1) {
-        fail("h5_trigger(HiHatOpen) did not raise the open gate");
-    } else {
-        ok("h5_trigger(HiHatOpen) raises the open gate");
-    }
-
-    status = h5_trigger((h5_context)ctx, H5_INSTR_HIHAT_CLOSED);
-    if (status != H5_OK || ctx->hihat_open != 0) {
-        fail("h5_trigger(HiHatClosed) did not lower the open gate");
-    } else {
-        ok("h5_trigger(HiHatClosed) lowers the open gate");
     }
 
     /* Null-context handling. */

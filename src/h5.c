@@ -33,8 +33,6 @@ static void h5_init_defaults(struct h5_context_s *ctx)
         ctx->instr[i].volume = H5_Q16_ONE / 2;
         ctx->instr[i].pan = H5_Q16_ONE / 2;
     }
-
-    ctx->hihat_open = 0;
 }
 
 h5_context h5_create_context(uint32_t sample_rate)
@@ -68,7 +66,6 @@ void h5_set_sample_rate(h5_context handle, uint32_t sample_rate)
     }
     ctx->sample_rate = (sample_rate == 0u) ? H5_DEFAULT_SAMPLE_RATE
         : sample_rate;
-    ctx->hihat_open = 0;
     h5_voice_init_all(ctx);
 }
 
@@ -240,11 +237,7 @@ h5_status h5_trigger(h5_context handle, h5_instrument instrument)
         return H5_ERR_INVALID_INSTRUMENT;
     }
 
-    if (instrument == H5_INSTR_HIHAT_OPEN) {
-        ctx->hihat_open = 1;
-    } else if (instrument == H5_INSTR_HIHAT_CLOSED) {
-        ctx->hihat_open = 0;
-    } else if (instrument == H5_INSTR_KICK) {
+    if (instrument == H5_INSTR_KICK) {
         h5_voice_trigger(ctx, H5_VOICE_KICK);
     } else if (instrument == H5_INSTR_TOM_1) {
         h5_voice_trigger(ctx, H5_VOICE_TOM_1);
