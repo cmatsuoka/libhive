@@ -1,0 +1,7 @@
+build/
+lib/
+*.o
+*.a
+*.so
+*.wav
+h5_test
