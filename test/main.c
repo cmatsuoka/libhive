@@ -20,6 +20,7 @@
 
 #include "h5.h"
 #include "h5_internal.h"
+#include "dsp.h"
 #include "wav_writer.h"
 
 #ifndef TEST_PI
@@ -446,6 +447,7 @@ static void usage(const char *program)
     printf("usage: %s <command>\n\n", program);
     printf("  --init             report the context size and default sample rate\n"
         "  --sine             verify the shared sine table, index by index\n"
+        "  --dsp              verify the fixed-point DSP primitives\n"
         "  --silence [path]   render silence, check it and write a WAV file\n"
         "                     (default path: build/silence.wav)\n"
         "  --api              verify the context lifecycle, parameters,\n"
@@ -469,6 +471,9 @@ int main(int argc, char **argv)
     }
     if (strcmp(command, "--sine") == 0) {
         return command_sine();
+    }
+    if (strcmp(command, "--dsp") == 0) {
+        return command_dsp();
     }
     if (strcmp(command, "--silence") == 0) {
         const char *path = (argc > 2) ? argv[2] : "build/silence.wav";

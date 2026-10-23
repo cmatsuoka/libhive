@@ -197,3 +197,122 @@ void h5_sine_init(void)
     rebuild_sine(table);
     h5_sine = table;
 }
+
+/*
+ * Sine interpolation, linear, over the 4096-entry period. Phase is 28 bits;
+ * the top 12 bits index the table, the low 16 bits interpolate. The
+ * interpolation is computed in Q31 directly, so the fractional contribution
+ * keeps sub-Q15-LSB precision; at integer table indices the output is
+ * exactly h5_sine_at(i) * 65536.
+ */
+int32_t h5_sine_interp(uint32_t phase)
+{
+    uint32_t idx, frac;
+    int32_t a, b;
+    int64_t v;
+
+    phase &= 0x0FFFFFFFu;
+    idx = phase >> 16;
+    frac = phase & 0xFFFFu;
+    a = h5_sine_at(idx);
+    b = h5_sine_at((idx + 1u) & 4095u);
+    /* a * 65536, not a << 16: a can be negative and signed left shift of a
+     * negative value is undefined. The sum stays inside int32 because the
+     * interpolant lies between the two table entries. The fraction product
+     * goes through the wide-multiply seam (16-bit multiplier). */
+    v = (int64_t)a * 65536
+        + h5_mulwide(b - a, (int32_t)frac);
+    return h5_sat_i32(v);
+}
+
+/*
+ * Semitone ratios: 2^(n/12) as Q16.16 for n = -62..+62, index n + 62.
+ * Regenerate with: python3 tools/gen_semitone_table.py
+ */
+const int32_t h5_semitone[H5_SEMITONE_COUNT] = {
+        1825,     1933,     2048,     2170,     2299,     2435,
+        2580,     2734,     2896,     3069,     3251,     3444,
+        3649,     3866,     4096,     4340,     4598,     4871,
+        5161,     5468,     5793,     6137,     6502,     6889,
+        7298,     7732,     8192,     8679,     9195,     9742,
+       10321,    10935,    11585,    12274,    13004,    13777,
+       14596,    15464,    16384,    17358,    18390,    19484,
+       20643,    21870,    23170,    24548,    26008,    27554,
+       29193,    30929,    32768,    34716,    36781,    38968,
+       41285,    43740,    46341,    49097,    52016,    55109,
+       58386,    61858,    65536,    69433,    73562,    77936,
+       82570,    87480,    92682,    98193,   104032,   110218,
+      116772,   123715,   131072,   138866,   147123,   155872,
+      165140,   174960,   185364,   196386,   208064,   220436,
+      233544,   247431,   262144,   277732,   294247,   311744,
+      330281,   349920,   370728,   392772,   416128,   440872,
+      467088,   494862,   524288,   555464,   588493,   623487,
+      660561,   699841,   741455,   785544,   832255,   881744,
+      934175,   989724,  1048576,  1110928,  1176987,  1246974,
+     1321123,  1399681,  1482910,  1571089,  1664511,  1763488,
+     1868350,  1979448,  2097152,  2221855,  2353974
+};
+
+int32_t h5_semitone_ratio(int semitones)
+{
+    if (semitones < -H5_SEMITONE_MAX) {
+        semitones = -H5_SEMITONE_MAX;
+    } else if (semitones > H5_SEMITONE_MAX) {
+        semitones = H5_SEMITONE_MAX;
+    }
+    return h5_semitone[semitones + H5_SEMITONE_MAX];
+}
+
+/*
+ * Soft-clip shaper: tanh(u) as Q15 for u = j/64, j = 0..96, i.e. the shaper's
+ * actual tanh argument range [0, 1.5) in Q29 with 97 uniform steps. There is
+ * no dead tail: the shaper's |u| never exceeds 1.5. Negative arguments are
+ * negated via odd symmetry; the top entry is tanh(96/64) = tanh(1.5) ~=
+ * 0.90515.
+ * Regenerate with: python3 tools/gen_softclip_table.py
+ */
+const int16_t h5_softclip[H5_SOFTCLIP_SIZE] = {
+         0,    512,   1024,   1535,   2045,   2555,   3063,   3570,
+      4075,   4578,   5079,   5577,   6073,   6566,   7056,   7542,
+      8025,   8505,   8980,   9452,   9919,  10382,  10840,  11294,
+     11742,  12186,  12625,  13058,  13486,  13908,  14325,  14737,
+     15142,  15542,  15936,  16324,  16706,  17081,  17451,  17815,
+     18173,  18524,  18869,  19208,  19541,  19868,  20189,  20503,
+     20812,  21114,  21411,  21701,  21986,  22264,  22537,  22804,
+     23065,  23320,  23570,  23815,  24053,  24287,  24515,  24738,
+     24955,  25168,  25375,  25578,  25775,  25968,  26156,  26339,
+     26518,  26693,  26863,  27029,  27190,  27348,  27501,  27650,
+     27796,  27937,  28075,  28210,  28340,  28468,  28592,  28712,
+     28829,  28943,  29054,  29162,  29267,  29369,  29469,  29565,
+     29659
+};
+
+/*
+ * Shaper: tanh(1.5 * m) for a Q31 input m. The tanh argument u = 1.5 * m
+ * lives in Q29 (m Q31 -> u = (3 * m) >> 3); with Q31 inputs |u| <= 1.5, so
+ * the lookup spans the table's [0, 1.5) domain and never needs the missing
+ * tail. Negative m uses odd symmetry over the positive branch. The
+ * interpolation is computed in Q31 directly, so the fractional contribution
+ * keeps sub-Q15-LSB precision.
+ */
+int32_t h5_softclip_q31(int32_t m)
+{
+    uint64_t ua;
+    uint32_t idx, frac;
+    int32_t y0, y1;
+    int64_t v;
+    int neg = m < 0;
+
+    ua = (uint32_t)((neg ? -(int64_t)m : (int64_t)m) * 3 >> 3);
+    idx = (uint32_t)(ua >> 23);
+    if (idx > (H5_SOFTCLIP_SIZE - 1u)) {
+        idx = H5_SOFTCLIP_SIZE - 1u;
+    }
+    frac = (uint32_t)((ua & 0x7FFFFFu) >> 7);
+    y0 = h5_softclip[idx];
+    y1 = (idx < (H5_SOFTCLIP_SIZE - 1u)) ? h5_softclip[idx + 1] : y0;
+    v = (int64_t)y0 * 65536
+        + h5_mulwide(y1 - y0, (int32_t)frac);
+    v = h5_sat_i32(v);
+    return neg ? -v : v;
+}

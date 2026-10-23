@@ -1,0 +1,149 @@
+/*
+ * h5_filter.c - second-order resonant filter core (SVF-style).
+ *
+ * One shared structure serves low-pass, band-pass and high-pass outputs:
+ * each h5_svf_set() call loads the numerator identity for one mode into
+ * the same denominator. The filter is a direct-form I biquad with Q30
+ * coefficients (a1 approaches -2 at low cutoff and high resonance, which
+ * does not fit Q31), Q31 samples and 64-bit products.
+ *
+ * Coefficients are computed on parameter change only. The reference engine
+ * realizes the same analog prototype as a TPT state-variable filter with
+ * g = tan(pi*fc/fs); this direct-form biquad is the same bilinear transform
+ * (the RBJ sin/cos form is algebraically identical for LP/HP/BP once the
+ * cutoff is prewarped by tan(w/2)). Keeping the biquad form lets the
+ * trigonometry come from the shared sine table through h5_sine_interp(),
+ * never from libm. The numerator identities match LP b1 = 2*b0, b2 = b0;
+ * HP b1 = -2*b0, b2 = b0; BP b1 = 0, b2 = -b0.
+ *
+ * The output shift rounds toward zero (magnitude truncation). Round-to-
+ * nearest sustains low-amplitude zero-input limit cycles that grow as the
+ * poles approach the unit circle (measured ~2^12 LSB at fc = 100 Hz,
+ * Q = 2, 96 kHz); truncation toward zero decays to true silence.
+ *
+ * Numerical note: the sine table's peak is 32767, so the derived sine/cosine
+ * carry a 30 ppm scale error versus the true unit circle. That is far below
+ * tunable and is documented rather than compensated.
+ */
+
+#include "h5_internal.h"
+
+void h5_svf_reset(struct h5_svf_s *f)
+{
+    f->x1 = 0;
+    f->x2 = 0;
+    f->y1 = 0;
+    f->y2 = 0;
+}
+
+void h5_svf_set(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
+    int32_t q_q16, uint32_t sample_rate)
+{
+    uint64_t cp, phase, max_cp;
+    int64_t s, c, alpha, a0, pre, num;
+    int32_t b0;
+
+    if (sample_rate == 0u) {
+        sample_rate = H5_DEFAULT_SAMPLE_RATE;
+    }
+
+    if (q_q16 < H5_Q16_ONE) {
+        q_q16 = H5_Q16_ONE;
+    }
+    if (q_q16 > 16 * H5_Q16_ONE) {
+        q_q16 = 16 * H5_Q16_ONE;
+    }
+
+    /* Clamp the cutoff below Nyquist so the sine stays positive. Both
+     * cutoffs are Q16 Hz: 0.49 * sample_rate in Q16. */
+    cp = (cutoff_q16 < 0) ? 0u : (uint64_t)(uint32_t)cutoff_q16;
+    max_cp = (uint64_t)sample_rate * 49u * 65536u / 100u;
+    if (cp > max_cp) {
+        cp = max_cp;
+    }
+
+    /* phase28 = cutoff / sample_rate * 2^28; cutoff is Q16. */
+    phase = (cp << 12) / sample_rate;
+    if (phase > 0x0FFFFFFEu) {
+        phase = 0x0FFFFFFEu;
+    }
+
+    s = h5_sine_interp((uint32_t)phase);
+    /* cos(w) = sin(w + pi/2): a quarter turn is 2^26 of the 28-bit phase. */
+    c = h5_sine_interp((uint32_t)((phase + 0x04000000u) & 0x0FFFFFFFu));
+
+    /* alpha = sin(w) / (2*Q), Q30. s is sin*2^31-scaled and Q is Q16, so
+     * alpha_q30 = s * 2^14 / Q_q16. */
+    alpha = ((int64_t)s << 14) / q_q16;
+    a0 = ((int64_t)1 << 30) + alpha;
+
+    f->a1 = (int32_t)(-(((int64_t)c * ((int64_t)1 << 30)) / a0));
+    f->a2 = (int32_t)(((((int64_t)1 << 30) - alpha) << 30) / a0);
+
+    switch (mode) {
+    case H5_SVF_HP:
+        pre = ((((int64_t)1 << 30) + (c >> 1) + 1) >> 1);
+        num = (pre << 30) / a0;
+        b0 = (int32_t)num;
+        f->b0 = b0;
+        f->b1 = -2 * b0;
+        f->b2 = b0;
+        f->mode = mode;
+        break;
+    case H5_SVF_BP:
+        pre = alpha;
+        num = (pre << 30) / a0;
+        b0 = (int32_t)num;
+        f->b0 = b0;
+        f->b1 = 0;
+        f->b2 = -b0;
+        f->mode = mode;
+        break;
+    default:
+        pre = ((((int64_t)1 << 30) - (c >> 1) + 1) >> 1);
+        num = (pre << 30) / a0;
+        b0 = (int32_t)num;
+        f->b0 = b0;
+        f->b1 = 2 * b0;
+        f->b2 = b0;
+        f->mode = H5_SVF_LP;
+        break;
+    }
+
+    h5_svf_reset(f);
+}
+
+int32_t h5_svf_run(struct h5_svf_s *f, int32_t x)
+{
+    int64_t ff, fb;
+    int32_t y;
+
+    /* Feed-forward, folded on the stored identities: LP/HP have b2 = b0
+     * and b1 = ±2*b0, BP has b1 = 0 and b2 = -b0. One wide multiply
+     * replaces two or three; int64 arithmetic makes the fold exact, so
+     * the accumulator and the output are unchanged. */
+    switch (f->mode) {
+    case H5_SVF_HP:
+        ff = h5_mulwide64((int64_t)f->b0,
+            (int64_t)x - 2 * (int64_t)f->x1 + (int64_t)f->x2);
+        break;
+    case H5_SVF_BP:
+        /* Two 32x32 products: x - x2 can exceed int32, so folding it into a
+         * single h5_mulwide() operand would overflow before the multiply. */
+        ff = h5_mulwide(f->b0, x) - h5_mulwide(f->b0, f->x2);
+        break;
+    default:
+        ff = h5_mulwide64((int64_t)f->b0,
+            (int64_t)x + 2 * (int64_t)f->x1 + (int64_t)f->x2);
+        break;
+    }
+    fb = h5_mulwide(f->a1, f->y1)
+        + h5_mulwide(f->a2, f->y2);
+    y = h5_trunc_shift30(ff - fb);
+
+    f->x2 = f->x1;
+    f->x1 = x;
+    f->y2 = f->y1;
+    f->y1 = y;
+    return y;
+}

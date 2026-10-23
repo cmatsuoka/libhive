@@ -62,6 +62,7 @@ check: $(TEST)
 	@mkdir -p $(BUILD)
 	./$(TEST) --init
 	./$(TEST) --sine
+	./$(TEST) --dsp
 	./$(TEST) --silence $(BUILD)/silence.wav
 	./$(TEST) --api
 
