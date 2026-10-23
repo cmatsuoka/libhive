@@ -16,7 +16,7 @@
  * not 48 kHz. Noise time is voice-local (it advances while the voice is
  * processed); the alternatives are a Phase 3 decision.
  *
- * Every voice owns its own LCG state so the five noise streams stay
+ * Every voice instance owns its own LCG state so the seven noise streams stay
  * uncorrelated; each default seed is distinct and non-zero.
  */
 
@@ -26,9 +26,10 @@
 #define H5_NOISE_INC 12345u
 #define H5_NOISE_RATE 48000u
 
-/* Arbitrary distinct non-zero seeds, one per voice. */
+/* Arbitrary distinct non-zero seeds, one per voice instance. */
 static const uint32_t h5_noise_seeds[H5_VOICE_COUNT] = {
-    0x31F38A59u, 0x6A09E667u, 0xBB67AE85u, 0x3C6EF372u, 0xA54FF53Au
+    0x31F38A59u, 0x6A09E667u, 0xBB67AE85u, 0x3C6EF372u,
+    0x510E527Fu, 0xA54FF53Au, 0x9B05688Cu
 };
 
 static void h5_noise_setup(struct h5_noise_s *n, uint32_t seed,

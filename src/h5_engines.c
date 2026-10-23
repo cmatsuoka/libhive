@@ -234,11 +234,11 @@ static int32_t h5_pow10_q30(int32_t v)
     return (int32_t)h5_shr_round((int64_t)v8 * v2, 30u);
 }
 
-void h5_tom_init(struct h5_tom_s *t, uint32_t sample_rate)
+void h5_tom_init(struct h5_tom_s *t, h5_voice voice, uint32_t sample_rate)
 {
     h5_env_init(&t->env);
     h5_env_init(&t->env_click);
-    h5_noise_init_voice(&t->noise, H5_VOICE_TOM, sample_rate);
+    h5_noise_init_voice(&t->noise, voice, sample_rate);
     h5_svf_reset(&t->noise_filter);
     h5_svf_reset(&t->out_filter);
     t->phase = 0u;

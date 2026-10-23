@@ -115,16 +115,24 @@ void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
     }
 
     for (i = 0u; i < frames; i++) {
-        int32_t kick_l, kick_r, tom_l, tom_r, snare_l, snare_r;
+        int32_t kick_l, kick_r, snare_l, snare_r;
+        int32_t tom1_l, tom1_r, tom2_l, tom2_r, tom3_l, tom3_r;
         int32_t left, right;
 
         h5_render_voice(ctx, H5_VOICE_KICK, H5_INSTR_KICK, &kick_l, &kick_r);
-        h5_render_voice(ctx, H5_VOICE_TOM, H5_INSTR_TOM, &tom_l, &tom_r);
         h5_render_voice(ctx, H5_VOICE_SNARE, H5_INSTR_SNARE,
             &snare_l, &snare_r);
+        h5_render_voice(ctx, H5_VOICE_TOM_1, H5_INSTR_TOM_1,
+            &tom1_l, &tom1_r);
+        h5_render_voice(ctx, H5_VOICE_TOM_2, H5_INSTR_TOM_2,
+            &tom2_l, &tom2_r);
+        h5_render_voice(ctx, H5_VOICE_TOM_3, H5_INSTR_TOM_3,
+            &tom3_l, &tom3_r);
 
-        left = h5_sat_add_q31(kick_l, h5_sat_add_q31(tom_l, snare_l));
-        right = h5_sat_add_q31(kick_r, h5_sat_add_q31(tom_r, snare_r));
+        left = h5_sat_add_q31(kick_l, h5_sat_add_q31(snare_l,
+            h5_sat_add_q31(tom1_l, h5_sat_add_q31(tom2_l, tom3_l))));
+        right = h5_sat_add_q31(kick_r, h5_sat_add_q31(snare_r,
+            h5_sat_add_q31(tom1_r, h5_sat_add_q31(tom2_r, tom3_r))));
 
         stereo_out[2u * i] = h5_q31_to_q15(left);
         stereo_out[2u * i + 1u] = h5_q31_to_q15(right);
@@ -238,8 +246,12 @@ h5_status h5_trigger(h5_context handle, h5_instrument instrument)
         ctx->hihat_open = 0;
     } else if (instrument == H5_INSTR_KICK) {
         h5_voice_trigger(ctx, H5_VOICE_KICK);
-    } else if (instrument == H5_INSTR_TOM) {
-        h5_voice_trigger(ctx, H5_VOICE_TOM);
+    } else if (instrument == H5_INSTR_TOM_1) {
+        h5_voice_trigger(ctx, H5_VOICE_TOM_1);
+    } else if (instrument == H5_INSTR_TOM_2) {
+        h5_voice_trigger(ctx, H5_VOICE_TOM_2);
+    } else if (instrument == H5_INSTR_TOM_3) {
+        h5_voice_trigger(ctx, H5_VOICE_TOM_3);
     } else if (instrument == H5_INSTR_SNARE) {
         h5_voice_trigger(ctx, H5_VOICE_SNARE);
     }

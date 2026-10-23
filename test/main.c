@@ -366,9 +366,9 @@ static int command_api(void)
     }
 
     /* Mixer clamping. */
-    status = h5_set_instrument_volume((h5_context)ctx, H5_INSTR_TOM,
+    status = h5_set_instrument_volume((h5_context)ctx, H5_INSTR_TOM_1,
         -H5_Q16_ONE);
-    if (status != H5_ERR_RANGE || ctx->instr[H5_INSTR_TOM].volume != 0) {
+    if (status != H5_ERR_RANGE || ctx->instr[H5_INSTR_TOM_1].volume != 0) {
         fail("h5_set_instrument_volume() did not clamp a negative value");
     } else {
         ok("h5_set_instrument_volume() clamps negative values to zero");
@@ -398,6 +398,36 @@ static int command_api(void)
         fail("h5_reset() did not restore Kick TonePitch default");
     } else {
         ok("h5_reset() restores parameter defaults");
+    }
+
+    /* The three Tom voices have independent parameter storage and distinct
+     * default tunings. */
+    if (ctx->voice_params[H5_VOICE_TOM_1][H5_PARAM_TONE_PITCH] <=
+            ctx->voice_params[H5_VOICE_TOM_2][H5_PARAM_TONE_PITCH] ||
+        ctx->voice_params[H5_VOICE_TOM_2][H5_PARAM_TONE_PITCH] <=
+            ctx->voice_params[H5_VOICE_TOM_3][H5_PARAM_TONE_PITCH]) {
+        fail("the three Tom voices do not have descending default tunings");
+    } else {
+        ok("the three Tom voices have distinct default tunings");
+    }
+
+    /* The three Tom voices have independent parameter storage: changing
+     * Tom 1 must leave Tom 2's stored value untouched. */
+    status = h5_get_param((h5_context)ctx, H5_VOICE_TOM_2,
+        H5_PARAM_TONE_PITCH, &value);
+    if (status != H5_OK) {
+        fail("h5_get_param(Tom2) failed before the independence check");
+    }
+
+    status = h5_set_param((h5_context)ctx, H5_VOICE_TOM_1,
+        H5_PARAM_TONE_PITCH, 300 * H5_Q16_ONE);
+    if (status != H5_OK ||
+        ctx->voice_params[H5_VOICE_TOM_1][H5_PARAM_TONE_PITCH] !=
+            300 * H5_Q16_ONE ||
+        ctx->voice_params[H5_VOICE_TOM_2][H5_PARAM_TONE_PITCH] != value) {
+        fail("the Tom voices do not keep independent parameter storage");
+    } else {
+        ok("the Tom voices keep independent parameter storage");
     }
 
     /* Trigger validation and hi-hat gate state. */

@@ -1,9 +1,10 @@
 /*
  * h5.h - public API of the Hive-V library.
  *
- * Hive-V is a five-voice percussion synthesizer. The library renders a single
- * stereo mix into a caller-supplied buffer. It has no I/O and no floating
- * point. A context is created with h5_create_context().
+ * Hive-V is a five-engine percussion synthesizer arranged as a seven-voice
+ * drum kit: Kick, Snare, Tom 1, Tom 2, Tom 3, Cymbal and Hi-hat. The library
+ * renders a single stereo mix into a caller-supplied buffer. It has no I/O and
+ * no floating point. A context is created with h5_create_context().
  *
  * Prefixes: macros and enum constants use H5_, functions and types use h5_,
  * and public structures are named h5_context and struct h5_foo.
@@ -30,21 +31,28 @@ extern "C" {
 /* The opaque context. */
 typedef void *h5_context;
 
-/* The five synthesis voices. */
+/* The seven voice instances, built from five engine types. The Tom engine is
+ * instantiated three times so the Toms have independent state and can sound
+ * simultaneously. */
 typedef enum {
     H5_VOICE_KICK = 0,
     H5_VOICE_SNARE,
-    H5_VOICE_TOM,
+    H5_VOICE_TOM_1,
+    H5_VOICE_TOM_2,
+    H5_VOICE_TOM_3,
     H5_VOICE_CYMBAL,
     H5_VOICE_HIHAT,
     H5_VOICE_COUNT
 } h5_voice;
 
-/* The six trigger targets. The two hi-hat instruments share H5_VOICE_HIHAT. */
+/* The eight trigger targets. The two hi-hat instruments share H5_VOICE_HIHAT.
+ * Each Tom instrument triggers its own Tom voice. */
 typedef enum {
     H5_INSTR_KICK = 0,
     H5_INSTR_SNARE,
-    H5_INSTR_TOM,
+    H5_INSTR_TOM_1,
+    H5_INSTR_TOM_2,
+    H5_INSTR_TOM_3,
     H5_INSTR_CYMBAL,
     H5_INSTR_HIHAT_CLOSED,
     H5_INSTR_HIHAT_OPEN,
@@ -153,9 +161,10 @@ h5_status h5_get_instrument_pan(const h5_context ctx,
     h5_instrument instrument,
     int32_t *out);
 
-/* Trigger one of the six instruments. The two hi-hat instruments share the
- * H5_VOICE_HIHAT voice; triggering open raises the open gate, triggering
- * closed lowers it and chokes a sounding open hi-hat. */
+/* Trigger one of the eight instruments. Each Tom instrument starts its own Tom
+ * voice, so Tom 1, Tom 2 and Tom 3 can sound simultaneously. The two hi-hat
+ * instruments share the H5_VOICE_HIHAT voice; triggering open raises the open
+ * gate, triggering closed lowers it and chokes a sounding open hi-hat. */
 h5_status h5_trigger(h5_context ctx, h5_instrument instrument);
 
 #ifdef __cplusplus

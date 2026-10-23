@@ -125,7 +125,23 @@ static int16_t *render(h5_context ctx, size_t frames)
 
 static void set_tom(h5_context ctx, h5_param param, int32_t value)
 {
-    h5_set_param(ctx, H5_VOICE_TOM, param, value);
+    h5_set_param(ctx, H5_VOICE_TOM_2, param, value);
+}
+
+static void set_tom_voice(h5_context ctx, h5_voice voice, h5_param param,
+    int32_t value)
+{
+    h5_set_param(ctx, voice, param, value);
+}
+
+static void configure_tom_for_mix(h5_context ctx, h5_voice voice,
+    int32_t pitch_hz)
+{
+    set_tom_voice(ctx, voice, H5_PARAM_NOISE_TONE, 0);
+    set_tom_voice(ctx, voice, H5_PARAM_CLICK_TONE, 0);
+    set_tom_voice(ctx, voice, H5_PARAM_BEND, 0);
+    set_tom_voice(ctx, voice, H5_PARAM_DECAY, H5_Q16_ONE);
+    set_tom_voice(ctx, voice, H5_PARAM_TONE_PITCH, pitch_hz * H5_Q16_ONE);
 }
 
 static int command_tom_hit(h5_context ctx)
@@ -137,7 +153,7 @@ static int command_tom_hit(h5_context ctx)
     int32_t peak, tail_peak;
     unsigned crossings;
 
-    /* Mid-tom tuning for the hit test: lower pitch, moderate decay and a
+    /* Tom 2 tuning for the hit test: lower pitch, moderate decay and a
      * smaller noise contribution than the default voice. */
     set_tom(ctx, H5_PARAM_TONE_PITCH, 130 * H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_NOISE_PITCH, 7000 * H5_Q16_ONE);
@@ -145,7 +161,7 @@ static int command_tom_hit(h5_context ctx)
     set_tom(ctx, H5_PARAM_BEND, 10 * H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_DECAY, 8 * H5_Q16_ONE / 10);
 
-    h5_trigger(ctx, H5_INSTR_TOM);
+    h5_trigger(ctx, H5_INSTR_TOM_2);
     buffer = render(ctx, frames);
     if (buffer == 0) {
         fail("out of memory");
@@ -207,7 +223,7 @@ static int command_tom_pitch(h5_context ctx)
     set_tom(ctx, H5_PARAM_BEND, 0);
     set_tom(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_TONE_PITCH, 100 * H5_Q16_ONE);
-    h5_trigger(ctx, H5_INSTR_TOM);
+    h5_trigger(ctx, H5_INSTR_TOM_2);
     low = render(ctx, frames);
 
     h5_reset(ctx);
@@ -216,7 +232,7 @@ static int command_tom_pitch(h5_context ctx)
     set_tom(ctx, H5_PARAM_BEND, 0);
     set_tom(ctx, H5_PARAM_DECAY, 1 * H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_TONE_PITCH, 400 * H5_Q16_ONE);
-    h5_trigger(ctx, H5_INSTR_TOM);
+    h5_trigger(ctx, H5_INSTR_TOM_2);
     high = render(ctx, frames);
 
     if (low == 0 || high == 0) {
@@ -252,7 +268,7 @@ static int command_tom_decay(h5_context ctx)
     set_tom(ctx, H5_PARAM_CLICK_TONE, 0);
     set_tom(ctx, H5_PARAM_BEND, 0);
     set_tom(ctx, H5_PARAM_DECAY, H5_Q16_ONE / 5);
-    h5_trigger(ctx, H5_INSTR_TOM);
+    h5_trigger(ctx, H5_INSTR_TOM_2);
     short_hit = render(ctx, frames);
 
     h5_reset(ctx);
@@ -260,7 +276,7 @@ static int command_tom_decay(h5_context ctx)
     set_tom(ctx, H5_PARAM_CLICK_TONE, 0);
     set_tom(ctx, H5_PARAM_BEND, 0);
     set_tom(ctx, H5_PARAM_DECAY, 3 * H5_Q16_ONE / 2);
-    h5_trigger(ctx, H5_INSTR_TOM);
+    h5_trigger(ctx, H5_INSTR_TOM_2);
     long_hit = render(ctx, frames);
 
     if (short_hit == 0 || long_hit == 0) {
@@ -297,7 +313,7 @@ static int command_tom_noise(h5_context ctx)
     set_tom(ctx, H5_PARAM_BEND, 0);
     set_tom(ctx, H5_PARAM_NOISE_TONE, 0);
     set_tom(ctx, H5_PARAM_CLICK_TONE, 0);
-    h5_trigger(ctx, H5_INSTR_TOM);
+    h5_trigger(ctx, H5_INSTR_TOM_2);
     tone = render(ctx, frames);
 
     h5_reset(ctx);
@@ -305,7 +321,7 @@ static int command_tom_noise(h5_context ctx)
     set_tom(ctx, H5_PARAM_BEND, 0);
     set_tom(ctx, H5_PARAM_NOISE_TONE, H5_Q16_ONE);
     set_tom(ctx, H5_PARAM_CLICK_TONE, 0);
-    h5_trigger(ctx, H5_INSTR_TOM);
+    h5_trigger(ctx, H5_INSTR_TOM_2);
     noise = render(ctx, frames);
 
     if (tone == 0 || noise == 0) {
@@ -338,6 +354,88 @@ static int command_tom_noise(h5_context ctx)
     return 0;
 }
 
+static int command_tom_simultaneous(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 1000u);
+    const size_t bytes = frames * 2u * sizeof(int16_t);
+    const h5_voice voices[3] = {
+        H5_VOICE_TOM_1, H5_VOICE_TOM_2, H5_VOICE_TOM_3
+    };
+    const h5_instrument instrs[3] = {
+        H5_INSTR_TOM_1, H5_INSTR_TOM_2, H5_INSTR_TOM_3
+    };
+    const int32_t pitches[3] = { 150, 250, 400 };
+    int16_t *solo[3] = { 0, 0, 0 };
+    int16_t *all;
+    int64_t solo_energy[3];
+    int64_t all_energy;
+    int32_t value;
+    int result = 0;
+    size_t i;
+
+    for (i = 0u; i < 3u; i++) {
+        h5_reset(ctx);
+        configure_tom_for_mix(ctx, voices[i], pitches[i]);
+        h5_trigger(ctx, instrs[i]);
+        solo[i] = render(ctx, frames);
+        if (solo[i] == 0) {
+            fail("out of memory");
+            free(solo[0]);
+            free(solo[1]);
+            free(solo[2]);
+            return -1;
+        }
+        if (h5_get_param(ctx, voices[i], H5_PARAM_TONE_PITCH, &value) != H5_OK
+            || value != pitches[i] * H5_Q16_ONE) {
+            fail("a Tom voice did not keep its own TonePitch");
+            result = -1;
+        }
+    }
+
+    h5_reset(ctx);
+    for (i = 0u; i < 3u; i++) {
+        configure_tom_for_mix(ctx, voices[i], pitches[i]);
+    }
+    for (i = 0u; i < 3u; i++) {
+        h5_trigger(ctx, instrs[i]);
+    }
+    all = render(ctx, frames);
+    if (all == 0) {
+        fail("out of memory");
+        free(solo[0]);
+        free(solo[1]);
+        free(solo[2]);
+        return -1;
+    }
+
+    all_energy = energy(all, 0u, frames);
+    for (i = 0u; i < 3u; i++) {
+        solo_energy[i] = energy(solo[i], 0u, frames);
+        if (peak_abs(solo[i], 0u, frames) < 100) {
+            fail("a solo Tom is silent");
+            result = -1;
+        }
+        if (memcmp(all, solo[i], bytes) == 0) {
+            fail("the three-Tom mix equals a solo Tom");
+            result = -1;
+        }
+        if (all_energy <= solo_energy[i]) {
+            fail("the three-Tom mix is not louder than a solo Tom");
+            result = -1;
+        }
+    }
+
+    if (result == 0) {
+        ok("Tom 1, Tom 2 and Tom 3 sound simultaneously with independent state");
+    }
+
+    free(solo[0]);
+    free(solo[1]);
+    free(solo[2]);
+    free(all);
+    return result;
+}
+
 int command_tom(void)
 {
     h5_context ctx = h5_create_context(TEST_RATE);
@@ -350,7 +448,8 @@ int command_tom(void)
     if (command_tom_hit(ctx) != 0 ||
         command_tom_pitch(ctx) != 0 ||
         command_tom_decay(ctx) != 0 ||
-        command_tom_noise(ctx) != 0) {
+        command_tom_noise(ctx) != 0 ||
+        command_tom_simultaneous(ctx) != 0) {
         h5_destroy_context(ctx);
         return 1;
     }

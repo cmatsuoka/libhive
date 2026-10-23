@@ -203,8 +203,13 @@ struct h5_kick_s {
     uint8_t active;
 };
 
+/* Number of Tom engine instances. H5_VOICE_TOM_1..H5_VOICE_TOM_3 are
+ * contiguous in the public enum. */
+#define H5_TOM_COUNT 3
+
 /* Tom voice runtime state. The engine keeps its own copies of the parameters
- * it needs per sample so the audio path never reads the parameter matrix. */
+ * it needs per sample so the audio path never reads the parameter matrix. Each
+ * Tom instance has its own envelopes, filters, oscillator and noise state. */
 struct h5_tom_s {
     struct h5_env_s env;       /* body AR^3: 5 ms attack, Decay release */
     struct h5_env_s env_click; /* transient AR^10: 1 ms attack, 0.1*(Decay+1) */
@@ -258,9 +263,10 @@ struct h5_context_s {
      * engine once voices are implemented. */
     uint8_t hihat_open;
 
-    /* Voice runtime state, initialized by h5_voice_init_all(). */
+    /* Voice runtime state, initialized by h5_voice_init_all(). The Toms are
+     * three independent instances of the same engine. */
     struct h5_kick_s kick;
-    struct h5_tom_s tom;
+    struct h5_tom_s tom[H5_TOM_COUNT];
     struct h5_snare_s snare;
 };
 
@@ -272,9 +278,9 @@ void h5_kick_trigger(struct h5_kick_s *k);
 int32_t h5_kick_process(struct h5_kick_s *k, uint32_t sample_rate);
 
 /* Tom engine. Times and controls are taken from the context's parameter
- * matrix; the noise generator is seeded once per context and free-runs
- * across triggers so successive hits are not identical. */
-void h5_tom_init(struct h5_tom_s *t, uint32_t sample_rate);
+ * matrix; the noise generator is seeded per Tom instance and free-runs across
+ * triggers so successive hits are not identical. */
+void h5_tom_init(struct h5_tom_s *t, h5_voice voice, uint32_t sample_rate);
 void h5_tom_configure(struct h5_tom_s *t,
     const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
 void h5_tom_trigger(struct h5_tom_s *t);
