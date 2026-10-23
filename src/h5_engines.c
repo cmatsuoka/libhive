@@ -28,7 +28,6 @@
 #define H5_TOM_OUT_HP_HZ       25
 #define H5_TOM_OUT_Q16         (46341) /* 1/sqrt(2) */
 #define H5_TOM_VOLUME_Q16      (H5_Q16_ONE / 2)
-#define H5_TOM_GAIN_Q16        H5_Q16_ONE
 
 /* Cutoff sweep contribution at env = 1, Hz in Q16. It is folded with
  * gain^4; the library renders full-velocity hits, so gain = 1. */
@@ -75,10 +74,8 @@
  */
 
 #define H5_KICK_DRIVE_Q16       (15 * H5_Q16_ONE / 100)
-#define H5_KICK_FILTER_BEND_Q16 H5_Q16_ONE
 #define H5_KICK_RESONANCE_Q16   H5_Q16_ONE
 #define H5_KICK_VOLUME_Q16      (H5_Q16_ONE / 2)
-#define H5_KICK_GAIN_Q16        H5_Q16_ONE
 #define H5_KICK_NOISE_SWEEP_Q16 (2000 * H5_Q16_ONE)
 
 void h5_kick_init(struct h5_kick_s *k, uint32_t sample_rate)
@@ -153,8 +150,8 @@ void h5_kick_trigger(struct h5_kick_s *k)
 
 int32_t h5_kick_process(struct h5_kick_s *k, uint32_t sample_rate)
 {
-    int32_t env_n, env_t, env3, env3_q16, one_minus, semitones_q16, ratio;
-    int32_t inc, s, s2, half, swept, base, cutoff, u, nf, tone, noise, sum;
+    int32_t env_n, env_t, env3, env3_q16, semitones_q16, ratio;
+    int32_t inc, s, s2, half, base, cutoff, u, nf, tone, noise, sum;
     int32_t blend, y, out;
 
     if (!k->active) {
@@ -189,12 +186,12 @@ int32_t h5_kick_process(struct h5_kick_s *k, uint32_t sample_rate)
 
     /* fc_n = (NoisePitch + 2000*gain^4*env^3)
      *        * (1 - FilterBend*(1 - env^3))
-     * Gain is fixed at 1.0 and FilterBend at its Kick default 1.0. */
-    one_minus = H5_Q16_ONE - env3_q16;
-    swept = h5_mul_q16(H5_KICK_FILTER_BEND_Q16, one_minus);
+     * Gain is fixed at 1.0. FilterBend is fixed at its Kick default 1.0, so
+     * the bend factor (1 - FilterBend*(1 - env^3)) collapses to env^3 and
+     * fc_n = (NoisePitch + 2000*gain^4*env^3) * env^3. */
     base = h5_sat_i32((int64_t)k->noise_pitch_q16
         + h5_mul_q16(H5_KICK_NOISE_SWEEP_Q16, env3_q16));
-    cutoff = h5_mul_q16(base, H5_Q16_ONE - swept);
+    cutoff = h5_mul_q16(base, env3_q16);
 
     h5_svf_tune(&k->noise_filter, H5_SVF_LP, cutoff, H5_KICK_RESONANCE_Q16,
         sample_rate);
@@ -219,7 +216,10 @@ int32_t h5_kick_process(struct h5_kick_s *k, uint32_t sample_rate)
 
     out = h5_svf_run(&k->out_filter, y);
     out = h5_mul_q16(out, H5_KICK_VOLUME_Q16);
-    out = h5_mul_q16(out, H5_KICK_GAIN_Q16);
+    /* Previous operation: out = h5_mul_q16(out, H5_KICK_GAIN_Q16);
+     * The actual formula is out = volume * gain. Gain is fixed at 1.0, so
+     * this multiply is an identity and is elided. Restore it if the gain
+     * value ever changes. */
 
     return out;
 }
@@ -383,7 +383,10 @@ int32_t h5_tom_process(struct h5_tom_s *t, uint32_t sample_rate)
 
     out = h5_svf_run(&t->out_filter, y);
     out = h5_mul_q16(out, H5_TOM_VOLUME_Q16);
-    out = h5_mul_q16(out, H5_TOM_GAIN_Q16);
+    /* Previous operation: out = h5_mul_q16(out, H5_TOM_GAIN_Q16);
+     * The actual formula is out = volume * gain. Gain is fixed at 1.0, so
+     * this multiply is an identity and is elided. Restore it if the gain
+     * value ever changes. */
 
     return out;
 }
@@ -416,7 +419,6 @@ int32_t h5_tom_process(struct h5_tom_s *t, uint32_t sample_rate)
  */
 
 #define H5_SNARE_VOLUME_Q16      (H5_Q16_ONE / 2)
-#define H5_SNARE_GAIN_Q16        H5_Q16_ONE
 #define H5_SNARE_OUT_Q16         H5_Q16_ONE
 #define H5_SNARE_ATTACK_Q16      H5_MS_Q16(1)
 #define H5_SNARE_CLICK_ATTACK_Q16 H5_MS_Q16(1)
@@ -599,7 +601,10 @@ int32_t h5_snare_process(struct h5_snare_s *sn, uint32_t sample_rate)
 
     out = h5_svf_run(&sn->out_filter, y);
     out = h5_mul_q16(out, H5_SNARE_VOLUME_Q16);
-    out = h5_mul_q16(out, H5_SNARE_GAIN_Q16);
+    /* Previous operation: out = h5_mul_q16(out, H5_SNARE_GAIN_Q16);
+     * The actual formula is out = volume * gain. Gain is fixed at 1.0, so
+     * this multiply is an identity and is elided. Restore it if the gain
+     * value ever changes. */
 
     return out;
 }
