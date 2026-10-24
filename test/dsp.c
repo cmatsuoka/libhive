@@ -51,6 +51,46 @@ static int64_t iabs64(int64_t v)
     return v < 0 ? -v : v;
 }
 
+/* Test-only copies of helpers that the library no longer carries. */
+
+static void test_noise_init(struct h5_noise_s *n, uint32_t seed,
+    uint32_t sample_rate)
+{
+    uint32_t divider;
+
+    if (seed == 0u) {
+        seed = 1u;
+    }
+    if (sample_rate == 0u) {
+        sample_rate = H5_DEFAULT_SAMPLE_RATE;
+    }
+    divider = sample_rate / 48000u;
+    if (divider == 0u) {
+        divider = 1u;
+    }
+    n->x = seed;
+    n->held = 0;
+    n->divider = divider;
+    n->phase = 0u;
+}
+
+static int32_t test_semitone_ratio(int semitones)
+{
+    if (semitones < -H5_SEMITONE_MAX) {
+        semitones = -H5_SEMITONE_MAX;
+    } else if (semitones > H5_SEMITONE_MAX) {
+        semitones = H5_SEMITONE_MAX;
+    }
+    return h5_semitone[semitones + H5_SEMITONE_MAX];
+}
+
+static void test_svf_set(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
+    int32_t q_q16, uint32_t sample_rate)
+{
+    h5_svf_tune(f, mode, cutoff_q16, q_q16, sample_rate);
+    h5_svf_reset(f);
+}
+
 static void check_fixed(void)
 {
     int bad = 0;
@@ -178,12 +218,12 @@ static void check_noise(void)
     int i;
     int bad = 0;
 
-    h5_noise_init(&a, 1u, DSP_SR);
+    test_noise_init(&a, 1u, DSP_SR);
     if (a.divider != 1u) {
         fail("the noise divider at 44100 is not 1");
         bad = 1;
     }
-    h5_noise_init(&b, 2u, 96000);
+    test_noise_init(&b, 2u, 96000);
     if (b.divider != 2u) {
         fail("the noise divider at 96000 is not 2");
         bad = 1;
@@ -215,7 +255,7 @@ static void check_noise(void)
     }
 
     /* Consecutive values differ at divider 1. */
-    h5_noise_init(&a, 1u, DSP_SR);
+    test_noise_init(&a, 1u, DSP_SR);
     bad = 0;
     for (i = 0; i < 1000; i++) {
         int32_t cur = h5_noise_next(&a);
@@ -234,7 +274,7 @@ static void check_noise(void)
     /* Hold pairs at divider 2: pairs (0,1), (2,3), ... are equal. The LCG
      * runs at the full rate and the value is sampled every second sample, so
      * the holds are X1, X1, X3, X3, ... */
-    h5_noise_init(&a, 1u, 96000);
+    test_noise_init(&a, 1u, 96000);
     bad = 0;
     for (i = 0; i < 10000; i++) {
         int32_t cur = h5_noise_next(&a);
@@ -256,7 +296,7 @@ static void check_noise(void)
     /* The LCG runs at the full sample rate and the output is decimated by
      * the divider. Check the exact sequence: seed 1, sr 96000, so the held
      * values are the LCG outputs at full-rate indices 0, 2, 4, ... */
-    h5_noise_init(&a, 1u, 96000);
+    test_noise_init(&a, 1u, 96000);
     {
         uint32_t x = 1u;
         int32_t held = 0;
@@ -279,8 +319,8 @@ static void check_noise(void)
     }
 
     /* Two seeds decorrelate. */
-    h5_noise_init(&a, 1u, DSP_SR);
-    h5_noise_init(&b, 0xF00DFFEEu, DSP_SR);
+    test_noise_init(&a, 1u, DSP_SR);
+    test_noise_init(&b, 0xF00DFFEEu, DSP_SR);
     for (i = 0; i < 100000; i++) {
         double u = h5_noise_next(&a) / 2147483648.0;
         double v = h5_noise_next(&b) / 2147483648.0;
@@ -448,17 +488,17 @@ static void check_semitone(void)
     int n;
     int bad = 0;
 
-    if (h5_semitone_ratio(0) != 65536) {
+    if (test_semitone_ratio(0) != 65536) {
         bad = 1;
     }
     for (n = -H5_SEMITONE_MAX; n <= H5_SEMITONE_MAX; n++) {
         double exact = pow(2.0, n / 12.0) * 65536.0;
         int32_t expected = (int32_t)floor(exact + 0.5);
 
-        if (h5_semitone_ratio(n) != expected) {
+        if (test_semitone_ratio(n) != expected) {
             if (bad < 4) {
                 printf("      n=%d: got %d, expected %d\n", n,
-                    (int)h5_semitone_ratio(n), (int)expected);
+                    (int)test_semitone_ratio(n), (int)expected);
             }
             bad++;
         }
@@ -468,13 +508,13 @@ static void check_semitone(void)
     } else {
         ok("the semitone table matches 2^(n/12) at every entry");
     }
-    if (h5_semitone_ratio(H5_SEMITONE_MAX + 100) !=
-            h5_semitone_ratio(H5_SEMITONE_MAX) ||
-        h5_semitone_ratio(-H5_SEMITONE_MAX - 100) !=
-            h5_semitone_ratio(-H5_SEMITONE_MAX)) {
-        fail("h5_semitone_ratio does not clamp out-of-range input");
+    if (test_semitone_ratio(H5_SEMITONE_MAX + 100) !=
+            test_semitone_ratio(H5_SEMITONE_MAX) ||
+        test_semitone_ratio(-H5_SEMITONE_MAX - 100) !=
+            test_semitone_ratio(-H5_SEMITONE_MAX)) {
+        fail("the semitone ratio helper does not clamp out-of-range input");
     } else {
-        ok("h5_semitone_ratio clamps out-of-range input");
+        ok("the semitone ratio helper clamps out-of-range input");
     }
 }
 
@@ -594,15 +634,15 @@ static void check_filter(void)
 
     /* Numerator identities per mode. */
     bad = 0;
-    h5_svf_set(&f, H5_SVF_LP, fc_q16, one_q16, DSP_SR);
+    test_svf_set(&f, H5_SVF_LP, fc_q16, one_q16, DSP_SR);
     if (f.b2 != f.b0 || f.b1 != 2 * f.b0) {
         bad = 1;
     }
-    h5_svf_set(&f, H5_SVF_HP, fc_q16, one_q16, DSP_SR);
+    test_svf_set(&f, H5_SVF_HP, fc_q16, one_q16, DSP_SR);
     if (f.b2 != f.b0 || f.b1 != -2 * f.b0) {
         bad = 1;
     }
-    h5_svf_set(&f, H5_SVF_BP, fc_q16, one_q16, DSP_SR);
+    test_svf_set(&f, H5_SVF_BP, fc_q16, one_q16, DSP_SR);
     if (f.b1 != 0 || f.b2 != -f.b0) {
         bad = 1;
     }
@@ -616,7 +656,7 @@ static void check_filter(void)
      * coefficient quantization: denominator 1 + a1 + a2 suffers the same
      * cancellation the exact filter cancels to zero, so the quantized DC
      * gain sits a few ten-thousandths of an LSB of Q16 off (measured 59). */
-    h5_svf_set(&f, H5_SVF_LP, fc_q16, one_q16, DSP_SR);
+    test_svf_set(&f, H5_SVF_LP, fc_q16, one_q16, DSP_SR);
     for (i = 0; i < 4000; i++) {
         f.y1 = h5_svf_run(&f, dc);
     }
@@ -629,7 +669,7 @@ static void check_filter(void)
     }
 
     /* HP passes Nyquist at unity. */
-    h5_svf_set(&f, H5_SVF_HP, fc_q16, one_q16, DSP_SR);
+    test_svf_set(&f, H5_SVF_HP, fc_q16, one_q16, DSP_SR);
     bad = 0;
     for (i = 0; i < 4000; i++) {
         int32_t y = h5_svf_run(&f, (i & 1) ? -(1 << 30) : (1 << 30));
@@ -645,7 +685,7 @@ static void check_filter(void)
     }
 
     /* BP rejects DC and has ~unity gain at its center frequency. */
-    h5_svf_set(&f, H5_SVF_BP, fc_q16, one_q16, DSP_SR);
+    test_svf_set(&f, H5_SVF_BP, fc_q16, one_q16, DSP_SR);
     for (i = 0; i < 4000; i++) {
         f.y1 = h5_svf_run(&f, dc);
     }
@@ -706,7 +746,7 @@ static void check_filter(void)
                     for (mode = H5_SVF_LP; mode <= H5_SVF_HP; mode++) {
                         int32_t tail_peak = 0;
 
-                        h5_svf_set(&f, mode, cuts[cut_i] * H5_Q16_ONE,
+                        test_svf_set(&f, mode, cuts[cut_i] * H5_Q16_ONE,
                             qs[q_i] * H5_Q16_ONE, rates[rate_i]);
                         h5_svf_run(&f, imp);
                         for (i = 0; i < 50000; i++) {

@@ -55,11 +55,6 @@ static void h5_noise_setup(struct h5_noise_s *n, uint32_t seed,
     n->phase = 0u;
 }
 
-void h5_noise_init(struct h5_noise_s *n, uint32_t seed, uint32_t sample_rate)
-{
-    h5_noise_setup(n, seed, sample_rate);
-}
-
 void h5_noise_init_voice(struct h5_noise_s *n, h5_voice voice,
     uint32_t sample_rate)
 {

@@ -2,7 +2,7 @@
  * h5_filter.c - second-order resonant filter core (SVF-style).
  *
  * One shared structure serves low-pass, band-pass and high-pass outputs:
- * each h5_svf_set() call loads the numerator identity for one mode into
+ * each h5_svf_tune() call loads the numerator identity for one mode into
  * the same denominator. The filter is a direct-form I biquad with Q30
  * coefficients (a1 approaches -2 at low cutoff and high resonance, which
  * does not fit Q31), Q31 samples and 64-bit products.
@@ -109,13 +109,6 @@ void h5_svf_tune(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
         f->mode = H5_SVF_LP;
         break;
     }
-}
-
-void h5_svf_set(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
-    int32_t q_q16, uint32_t sample_rate)
-{
-    h5_svf_tune(f, mode, cutoff_q16, q_q16, sample_rate);
-    h5_svf_reset(f);
 }
 
 int32_t h5_svf_run(struct h5_svf_s *f, int32_t x)

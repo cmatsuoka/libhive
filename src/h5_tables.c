@@ -159,16 +159,6 @@ const int32_t h5_semitone[H5_SEMITONE_COUNT] = {
      1868350,  1979448,  2097152,  2221855,  2353974
 };
 
-int32_t h5_semitone_ratio(int semitones)
-{
-    if (semitones < -H5_SEMITONE_MAX) {
-        semitones = -H5_SEMITONE_MAX;
-    } else if (semitones > H5_SEMITONE_MAX) {
-        semitones = H5_SEMITONE_MAX;
-    }
-    return h5_semitone[semitones + H5_SEMITONE_MAX];
-}
-
 /* tan(pi * f / sr) as Q16 from the shared sine table. theta = pi*f/sr maps
  * into the table as the fraction theta/(2*pi) = f/(2*sr); the cosine comes
  * from a quarter-turn offset in phase. Used for the one-pole pre-filter

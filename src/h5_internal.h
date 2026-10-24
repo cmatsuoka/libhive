@@ -80,10 +80,6 @@ int32_t h5_tanpi_q16(int32_t f_q16, uint32_t sample_rate);
 #define H5_SEMITONE_COUNT (2 * H5_SEMITONE_MAX + 1)
 extern const int32_t h5_semitone[H5_SEMITONE_COUNT];
 
-/* Lookup with clamping: semitones outside [-62, +62] return the table end
- * value. */
-int32_t h5_semitone_ratio(int semitones);
-
 /* Fractional lookup: semitones_q16 is a signed Q16.16 semitone count,
  * linearly interpolated between the table entries and clamped to the table
  * range. */
@@ -120,10 +116,6 @@ struct h5_noise_s {
     uint32_t phase;  /* position in the hold cycle */
     int32_t held;    /* held value, Q31 */
 };
-
-/* Initialise a noise generator with an explicit seed. A seed of 0 becomes
- * 1. */
-void h5_noise_init(struct h5_noise_s *n, uint32_t seed, uint32_t sample_rate);
 
 /* Initialise a noise generator with the per-voice default seed (distinct
  * and non-zero per voice). */
@@ -166,7 +158,7 @@ void h5_env_trigger(struct h5_env_s *e);
 /* Advance one sample and return the Q30 envelope value. */
 int32_t h5_env_next(struct h5_env_s *e);
 
-/* Filter modes for h5_svf_set(). */
+/* Filter modes. */
 enum {
     H5_SVF_LP = 0,
     H5_SVF_BP,
@@ -184,12 +176,6 @@ struct h5_svf_s {
 };
 
 void h5_svf_reset(struct h5_svf_s *f);
-
-/* Compute all coefficients for one mode. cutoff_q16 is Q16 Hz and is
- * clamped below 0.49 * sample_rate; q_q16 is Q16 and clamped to [0.5, 16].
- * Trivially cheap; call only on parameter change. */
-void h5_svf_set(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
-    int32_t q_q16, uint32_t sample_rate);
 
 /* Recompute the coefficients without touching the filter state. Used by
  * engines whose cutoff is swept per sample. */
