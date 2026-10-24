@@ -219,6 +219,13 @@ static int command_api(void)
     int32_t value;
     h5_status status;
 
+    /* Version reporting. */
+    if (h5_version_number() != H5_VERSION_NUMBER) {
+        fail("h5_version_number() does not match H5_VERSION_NUMBER");
+    } else {
+        ok("h5_version_number() returns the header version");
+    }
+
     h5_destroy_context(0);
     ok("h5_destroy_context(NULL) is ignored");
 

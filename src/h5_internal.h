@@ -171,11 +171,11 @@ enum {
 /* Second-order resonant filter, direct-form I. Coefficients are Q30
  * (Q31 samples, 64-bit products); a1 approaches -2. */
 struct h5_svf_s {
-    int32_t b0;         /* Q30 numerator; b1/b2 follow from b0 and mode */
+    int32_t b0;         /* Q30 numerator; the feed-forward terms derive from
+                         * it and the mode */
     int32_t a1, a2;     /* Q30 normalised denominators */
     int32_t x1, x2, y1, y2; /* Q31 state */
-    int32_t mode;       /* H5_SVF_*; the run loop folds the feed-forward
-                         * per mode (b1/b2 are redundant with b0) */
+    int32_t mode;       /* H5_SVF_*; selects the feed-forward identity */
 };
 
 void h5_svf_reset(struct h5_svf_s *f);
@@ -236,9 +236,9 @@ struct h5_pitch_curve_s {
  * Engine outputs are Q30 (1.0 = 1 << 30) with one headroom bit for the
  * shaper stage's overshoot; the mixer converts. */
 struct h5_kick_s {
-    struct h5_env_s env_noise;  /* noise AR: ~2 ms attack, NoiseDecay release */
+    struct h5_env_s env_noise;  /* noise AR: ~2 ms attack, Decay release */
     struct h5_env_s env_tone;   /* tone AR: 0.005*Decay attack, Decay release */
-    struct h5_env_s env_click;  /* burst AR^10: 1 ms, 0.2*NoiseDecay+0.1 */
+    struct h5_env_s env_click;  /* burst AR^10: 1 ms, 0.2*Decay+0.1 release */
     struct h5_noise_s noise;
     struct h5_svf_s noise_filter;
     struct h5_sweep_s noise_sweep;
@@ -295,10 +295,11 @@ struct h5_tom_s {
 /* Snare voice runtime state. */
 struct h5_snare_s {
     struct h5_env_s env;       /* body AR: 1 ms attack, Decay release */
-    struct h5_env_s env_click; /* transient AR^10: 1 ms attack */
+    struct h5_env_s env_click; /* transient AR^10: 1 ms attack,
+                                * 0.2*Decay+0.1 s release */
     struct h5_noise_s noise;
     struct h5_svf_s rattle[4];  /* four fixed band-pass resonators */
-    struct h5_svf_s out_filter; /* output low-pass at NoisePitch */
+    struct h5_svf_s out_filter; /* output low-pass; base cutoff NoisePitch */
     struct h5_sweep_s out_sweep; /* swept coefficients for out_filter */
     struct h5_pitch_curve_s pitch_curve;
     uint32_t phase;            /* 28-bit tone oscillator phase */
@@ -381,7 +382,7 @@ int32_t h5_voice_process(struct h5_context_s *ctx, h5_voice voice);
 /* True while the named voice's engine still has output to render. */
 bool h5_voice_is_active(const struct h5_context_s *ctx, h5_voice voice);
 
-/* Add one instrument's mono Q31 output to the 64-bit stereo accumulators,
+/* Add one instrument's mono Q30 output to the 64-bit stereo accumulators,
  * applying its mixer volume and pan. */
 void h5_mix_add(const struct h5_context_s *ctx, h5_instrument instrument,
     int32_t voice_out, int64_t *left, int64_t *right);

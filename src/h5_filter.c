@@ -7,7 +7,8 @@
  * coefficients (a1 approaches -2 at low cutoff and high resonance, which
  * does not fit Q31), Q31 samples and 64-bit products.
  *
- * Coefficients are computed on parameter change only. The engine realizes
+ * The static filters' coefficients are computed on parameter change only;
+ * swept filters use the precomputed tables further down. The engine realizes
  * the same analog prototype as a TPT state-variable filter with
  * g = tan(pi*fc/fs); this direct-form biquad is the same bilinear transform
  * (the RBJ sin/cos form is algebraically identical for LP/HP/BP once the

@@ -1,8 +1,8 @@
 /*
  * h5_voice.c - per-voice lifecycle and dispatch.
  *
- * Engines are added here as they are implemented. Every function tolerates
- * voices that do not have an engine yet and leaves them silent.
+ * Each public voice maps to one of the three engine types. The Tom engine is
+ * instantiated three times, so the Tom voices keep independent state.
  */
 
 #include "h5_internal.h"

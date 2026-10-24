@@ -578,9 +578,9 @@ static int command_kick_pitch(h5_context ctx)
 static int command_kick_bend(h5_context ctx)
 {
     const size_t frames = frames_for_ms(TEST_RATE, 250u);
-    /* The pitch envelope falls fast (0.2*Decay+0.1 release), so the
-     * comparison window stays short enough that the bent hit's initial
-     * register is dominant. */
+    /* The pitch exponent is env^3, so the bend is concentrated at the
+     * start; the comparison window stays short enough that the bent hit's
+     * initial register is dominant. */
     const size_t window = frames_for_ms(TEST_RATE, 50u);
     int16_t *flat;
     int16_t *fall;
@@ -677,10 +677,10 @@ static int command_kick_noise(h5_context ctx)
     int16_t *noise;
     unsigned zc_tone, zc_noise;
 
-    /* The noise path is gated by Click^0.7 as well as NoiseTone, so keep a
-     * non-zero Click to compare the two balance extremes. The noise attack is
-     * 0.2*Decay + 0.1 s, so keep Decay short enough that the noise is already
-     * present inside the analysis window (0.3 s is the Kick preset default). */
+    /* The noise path is gated by (1-Click)^0.7 as well as NoiseTone, so keep
+     * a non-zero Click to compare the two balance extremes. The noise
+     * envelope releases over Decay, so the chosen Decay keeps it audible
+     * across the analysis window (0.3 s is the Kick preset default). */
     h5_reset(ctx);
     set_kick(ctx, H5_PARAM_TONE_PITCH, 60 * H5_Q16_ONE);
     set_kick(ctx, H5_PARAM_BEND, 0);
@@ -985,7 +985,7 @@ static int command_snare_noise(h5_context ctx)
         ok("Snare NoiseTone adds high-frequency rattle");
     }
 
-    /* The rattle path uses four narrow band-pass filters, so its total
+    /* The rattle path uses four weighted band-pass filters, so its total
      * energy can be lower than a pure sine tone. Verify it is still audible
      * and carries broadband high-frequency content. */
     if (peak_abs(noise, 0u, window) < 100) {

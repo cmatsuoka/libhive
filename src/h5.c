@@ -1,9 +1,8 @@
 /*
  * h5.c - Hive-V context lifecycle, trigger/mixer API and render entry point.
  *
- * This file provides the context lifecycle, the parameter/mixer/trigger API,
- * and the render entry point. Voices are added incrementally; instruments
- * without an engine yet render silence.
+ * This file provides the context lifecycle, the instrument-level wrappers and
+ * the render entry point.
  */
 
 #include "h5.h"
@@ -187,4 +186,9 @@ h5_status h5_trigger(h5_context handle, h5_instrument instrument)
 
     h5_voice_trigger_instrument(ctx, instrument);
     return H5_OK;
+}
+
+uint32_t h5_version_number(void)
+{
+    return H5_VERSION_NUMBER;
 }

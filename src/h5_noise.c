@@ -13,8 +13,8 @@
  * sample_rate / D: exactly 48 kHz only when the render rate is an integer
  * multiple of 48 kHz (48 kHz, 96 kHz, ...). At 44.1 kHz D is 1 and the held
  * rate is 44.1 kHz; at 88.2 kHz D is 1 as well (the quotient truncates),
- * not 48 kHz. Noise time is voice-local (it advances while the voice is
- * processed); the alternatives are a Phase 3 decision.
+ * not 48 kHz. Noise time is voice-local: it advances only while the voice is
+ * processed.
  *
  * Every voice instance owns its own LCG state so the five noise streams stay
  * uncorrelated; each default seed is distinct and non-zero.

@@ -16,11 +16,10 @@
  *     branch whose weight per engine differs (Kick 4.7, Tom/Snare 1.0);
  *     the shaper branch follows the body envelope so it decays with the
  *     sound.
- *   - Sustained noise: filtered noise * AR(noise_attack, NoiseDecay) *
- *     noiseWeight, scaling linearly with trigger gain.
+ *   - Sustained noise: filtered noise * AR(noise_attack, Decay release) *
+ *     noiseWeight.
  *   - Transient burst: AR^10 over the same filtered noise with a 1 ms
- *     attack, weighted Click^0.7 (velocity factors evaluate to 1.0 at
- *     full gain; velocity handling lives in the trigger layer).
+ *     attack, weighted Click^0.7.
  *   - Pitch envelope: f = Pitch * 1.5^(Bend*env^3/12) applies to the
  *     tonal branch of each voice.
  *   - Noise cutoff sweep: (NoisePitch + 2000*env_n^3)
@@ -52,8 +51,7 @@
 #define H5_PF_HI_HZ (20000 * H5_Q16_ONE)
 #define H5_PF_338_HZ (22190489) /* 338.6 Hz in Q16 */
 
-/* Cutoff sweep contribution at env = 1, Hz in Q16 (velocity depth factors
- * fold to 1.0 at full gain; velocity handling lives in the trigger layer). */
+/* Cutoff sweep contribution at env = 1, Hz in Q16. */
 #define H5_NOISE_SWEEP_Q16 (2000 * H5_Q16_ONE)
 
 /* Kick path weights and constants, Q16. */
@@ -67,8 +65,7 @@
 #define H5_KICK_OUT_HP_HZ 15
 #define H5_KICK_OUT_Q16 (46341) /* 1/sqrt(2) */
 
-/* Tom path constants, Q16. The transient click scale folds the velocity
- * factor at full gain. */
+/* Tom path constants, Q16. */
 #define H5_TOM_DRIVE_Q16 (13 * H5_Q16_ONE / 100)
 #define H5_TOM_SHAPER_WEIGHT_Q16 H5_Q16_ONE
 #define H5_TOM_RESONANCE_Q16 H5_Q16_ONE
@@ -261,7 +258,7 @@ static const int32_t h5_snare_rattle_weight[4] = {
  * Kick engine.
  *
  * Signal flow:
- *   env_n  = AR(~2 ms, NoiseDecay)
+ *   env_n  = AR(~2 ms, Decay)
  *   env_t  = AR(0.005*Decay, Decay), used cubed
  *   env_c  = AR^10(1 ms, 0.2*Decay+0.1)
  *   fc_n   = (NoisePitch + 2000*env_n^3) * (1 - 0.5*(1 - env_n^3))
@@ -273,7 +270,7 @@ static const int32_t h5_snare_rattle_weight[4] = {
  *   tone   = env_t^3 * 0.9*NoiseTone^0.7*(1-Click)^0.7
  *            * ((1-Drive)*s + Drive*4.7*0.5*(s2+s))
  *   out    = 1.5*tanh(tone+noise+click) * 1.10479 -> HP15
- *   (the single Decay control writes both NoiseDecay and ToneDecay)
+ *   (the single Decay control sets both the tone and noise envelopes)
  */
 
 void h5_kick_init(struct h5_kick_s *k, uint32_t sample_rate)
@@ -338,7 +335,7 @@ void h5_kick_configure(struct h5_kick_s *k,
 
     /* Envelopes. The tone env drives both amplitude and pitch and starts
      * fast; the noise env shares the tone release; the click burst keeps
-     * a ~1 ms attack with its own 0.2*NoiseDecay+0.1 release. */
+     * a ~1 ms attack with its own 0.2*Decay+0.1 release. */
     h5_env_set_times(&k->env_tone, decay / 200, decay, sample_rate);
     noise_attack = (2 * decay) / 10 + H5_Q16_ONE / 10;
     h5_env_set_times(&k->env_noise, H5_MS_Q16(2), decay, sample_rate);
@@ -458,7 +455,9 @@ int32_t h5_kick_process(struct h5_kick_s *k)
  *   body    = env^3 * (1-Click)^0.7 * (NoiseTone^0.7*s
  *                                          + 0.3*(1-NoiseTone)^0.7*nf)
  *   click   = env_c^10 * Click^0.7 * nf
- *   out     = 1.5*tanh((1-Drive)*mix + Drive*0.5*(s2+s)) * 1.10479 -> HP25
+ *   out     = 1.5*tanh((1-Drive)*mix
+ *                       + Drive*env^3*(1-Click)^0.7*0.5*(s2+s))
+ *             * 1.10479 -> HP25
  *   (each Tom instance tunes its own filter-bend depth)
  */
 
@@ -589,8 +588,8 @@ int32_t h5_tom_process(struct h5_tom_s *t)
     body = h5_mul_q30(sum, env3);
     body = h5_mul_q16(body, t->body_gain_q16);
 
-    /* Transient burst: env_c^10 * Click^0.7 * nf (velocity factors evaluate
-     * to 1.0 at full gain). Skip it once the burst envelope is silent. */
+    /* Transient burst: env_c^10 * Click^0.7 * nf. Skip it once the burst
+     * envelope is silent. */
     click = 0;
     if (env_click > 0) {
         click = h5_mul_q16(nf, t->click_gain_q16);
@@ -769,8 +768,8 @@ int32_t h5_snare_process(struct h5_snare_s *sn)
     body = h5_mul_q30(sum, env3);
     body = h5_mul_q16(body, sn->body_gain_q16);
 
-    /* Transient: env_c^10 * Click^0.7 * rattle (velocity factors evaluate
-     * to 1.0 at full gain). Skip it once the burst envelope is silent. */
+    /* Transient: env_c^10 * Click^0.7 * rattle. Skip it once the burst
+     * envelope is silent. */
     click = 0;
     if (env_click > 0) {
         click = h5_mul_q16(rattle, sn->click_gain_q16);

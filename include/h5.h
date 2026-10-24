@@ -6,8 +6,8 @@
  * into a caller-supplied buffer. It has no I/O and no floating point. A
  * context is created with h5_create_context().
  *
- * Prefixes: macros and enum constants use H5_, functions and types use h5_,
- * and public structures are named h5_context and struct h5_foo.
+ * Prefixes: macros and enum constants use H5_, functions and types use h5_.
+ * The context is an opaque handle (h5_context).
  */
 
 #ifndef HIVE_V_H5_H
@@ -21,6 +21,14 @@
 extern "C" {
 #endif
 
+/* Library version. major/minor/patch are packed as 0x00MMmmpp.
+ * The plain integer constants keep H5_VERSION_NUMBER usable in #if. */
+#define H5_VERSION_MAJOR 0
+#define H5_VERSION_MINOR 1
+#define H5_VERSION_PATCH 0
+#define H5_VERSION_NUMBER \
+    ((H5_VERSION_MAJOR << 16) | (H5_VERSION_MINOR << 8) | H5_VERSION_PATCH)
+
 /* Sample rate used when the caller passes 0 to h5_create_context() or
  * h5_set_sample_rate(). */
 #define H5_DEFAULT_SAMPLE_RATE 44100u
@@ -30,6 +38,11 @@ extern "C" {
 
 /* The opaque context. */
 typedef void *h5_context;
+
+/* Return the version of the library the process is linked against, packed as
+ * H5_VERSION_NUMBER. This reports the compiled library, so a host can compare
+ * it with the header's H5_VERSION_NUMBER to detect a mismatched build. */
+uint32_t h5_version_number(void);
 
 /* The five voice instances, built from three engine types. The Tom engine is
  * instantiated three times so the Toms have independent state and can sound
