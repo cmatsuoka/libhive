@@ -466,7 +466,7 @@ static int command_api(void)
 
     /* h5_reset() restores parameter defaults. */
     if (ctx->voice_params[H5_VOICE_KICK][H5_PARAM_TONE_PITCH] !=
-        2744713) {  /* 41.881 Hz as Q16 (round-half-up) */
+        40 * H5_Q16_ONE) {
         fail("h5_reset() did not restore Kick TonePitch default");
     } else {
         ok("h5_reset() restores parameter defaults");
