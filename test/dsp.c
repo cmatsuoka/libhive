@@ -478,6 +478,43 @@ static void check_semitone(void)
     }
 }
 
+
+static void check_pow07(void)
+{
+    int k;
+    int worst = 0;
+    int bad = 0;
+
+    if (h5_pow07_q16(0) != 0 || h5_pow07_q16(H5_Q16_ONE) != H5_Q16_ONE) {
+        fail("the x^0.7 mapping misses its endpoints");
+    } else {
+        ok("the x^0.7 mapping hits its endpoints");
+    }
+
+    for (k = 0; k <= 4096; k++) {
+        int32_t x = (int32_t)(((int64_t)k * H5_Q16_ONE) / 4096);
+        double exact = pow((double)x / (double)H5_Q16_ONE, 0.7)
+            * (double)H5_Q16_ONE;
+        int32_t expected = (int32_t)floor(exact + 0.5);
+        int32_t got = h5_pow07_q16(x);
+        int err = got - expected;
+
+        if (err < 0) {
+            err = -err;
+        }
+        if (err > worst) {
+            worst = err;
+        }
+    }
+    if (worst > 600) {
+        printf("FAIL: x^0.7 mapping deviates (worst %d Q16 LSB)\n", worst);
+        failures++;
+    } else {
+        printf("ok  : x^0.7 mapping tracks pow() (worst %d Q16 LSB)\n", worst);
+    }
+    (void)bad;
+}
+
 static void check_softclip(void)
 {
     int k;
@@ -711,6 +748,7 @@ int command_dsp(void)
     check_noise();
     check_envelope();
     check_semitone();
+    check_pow07();
     check_softclip();
     check_filter();
 

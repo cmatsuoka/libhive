@@ -194,29 +194,30 @@ int32_t h5_tanpi_q16(int32_t f_q16, uint32_t sample_rate)
 }
 
 /*
- * x^0.7 as Q16.16 for x = j/64, j = 0..64. The drum voices use this
- * exponent for the NoiseTone and Click controls. Linear interpolation
- * between the entries is well below the control resolution. Regenerate
- * with: python3 tools/gen_pow07_table.py
+ * x^0.7 as Q14.14 for x = j/64, j = 0..64. The drum voices use this
+ * exponent for the NoiseTone and Click controls. It is evaluated only on
+ * parameter change and interpolated linearly; Q14 storage is about 0.003%
+ * of full scale, far below the control resolution. Regenerate with:
+ * python3 tools/gen_pow07_table.py
  */
-const int32_t h5_pow07[H5_POW07_SIZE] = {
-         0,   3566,   5793,   7694,   9410,  11001,
-     12499,  13923,  15287,  16601,  17871,  19104,
-     20304,  21474,  22617,  23737,  24834,  25910,
-     26968,  28008,  29032,  30041,  31035,  32016,
-     32984,  33940,  34885,  35819,  36742,  37656,
-     38560,  39455,  40342,  41221,  42091,  42954,
-     43809,  44658,  45499,  46334,  47162,  47985,
-     48801,  49611,  50416,  51216,  52010,  52799,
-     53582,  54361,  55136,  55905,  56670,  57431,
-     58187,  58940,  59688,  60432,  61172,  61909,
-     62641,  63370,  64096,  64818,  65536
+const int16_t h5_pow07[H5_POW07_SIZE] = {
+         0,    891,   1448,   1923,   2353,   2750,
+      3125,   3481,   3822,   4150,   4468,   4776,
+      5076,   5369,   5654,   5934,   6208,   6478,
+      6742,   7002,   7258,   7510,   7759,   8004,
+      8246,   8485,   8721,   8955,   9186,   9414,
+      9640,   9864,  10086,  10305,  10523,  10738,
+     10952,  11164,  11375,  11583,  11791,  11996,
+     12200,  12403,  12604,  12804,  13002,  13200,
+     13396,  13590,  13784,  13976,  14168,  14358,
+     14547,  14735,  14922,  15108,  15293,  15477,
+     15660,  15843,  16024,  16204,  16384,
 };
 
 int32_t h5_pow07_q16(int32_t x_q16)
 {
     uint32_t idx, frac;
-    int32_t a, b;
+    int32_t a, b, q14;
 
     if (x_q16 <= 0) {
         return 0;
@@ -228,7 +229,8 @@ int32_t h5_pow07_q16(int32_t x_q16)
     frac = (uint32_t)x_q16 & 0x3FFu;
     a = h5_pow07[idx];
     b = h5_pow07[idx + 1u];
-    return a + (int32_t)h5_shr_round(h5_mulwide(b - a, (int32_t)frac), 10u);
+    q14 = a + (int32_t)h5_shr_round(h5_mulwide(b - a, (int32_t)frac), 10u);
+    return q14 << 2;
 }
 
 int32_t h5_semitone_ratio_interp(int32_t semitones_q16)

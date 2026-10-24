@@ -89,11 +89,12 @@ int32_t h5_semitone_ratio(int semitones);
  * range. */
 int32_t h5_semitone_ratio_interp(int32_t semitones_q16);
 
-/* x^0.7 as Q16.16 for x in [0, 1], from a 65-entry table (step 1/64) with
- * linear interpolation. Used for the drum voices' NoiseTone and Click
- * power-law mappings, which are evaluated only on parameter change. */
+/* x^0.7 as Q14.14 for x in [0, 1], from a 65-entry table (step 1/64) with
+ * linear interpolation; h5_pow07_q16() returns Q16.16. Used for the drum
+ * voices' NoiseTone and Click power-law mappings, which are evaluated only
+ * on parameter change. */
 #define H5_POW07_SIZE 65
-extern const int32_t h5_pow07[H5_POW07_SIZE];
+extern const int16_t h5_pow07[H5_POW07_SIZE];
 int32_t h5_pow07_q16(int32_t x_q16);
 
 /* Soft-clip shaper table: tanh(u) as Q15 for u = j/H5_SOFTCLIP_STEPS,
