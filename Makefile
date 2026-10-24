@@ -9,7 +9,8 @@
 CC      ?= cc
 AR      ?= ar
 RANLIB  ?= ranlib
-OPT     ?= -O2
+OPT     ?= -Os
+HOT_OPT ?= -O2
 
 CSTD     := -std=c99
 WARN     := -Wall -Wextra -Werror
@@ -36,6 +37,20 @@ LIB_SRCS  := $(wildcard src/*.c)
 TEST_SRCS := $(wildcard test/*.c)
 LIB_OBJS  := $(patsubst src/%.c,$(BUILD)/src/%.o,$(LIB_SRCS))
 TEST_OBJS := $(patsubst test/%.c,$(BUILD)/test/%.o,$(TEST_SRCS))
+
+# Size-first default, but keep the per-sample DSP translation units at -O2.
+# The lifecycle and parameter-table files are cold and stay at $(OPT).
+HOT_SRCS := \
+	src/h5_engines.c \
+	src/h5_filter.c \
+	src/h5_fixed.c \
+	src/h5_noise.c \
+	src/h5_mixer.c \
+	src/h5_tables.c \
+	src/h5_voice.c
+HOT_OBJS := $(patsubst src/%.c,$(BUILD)/src/%.o,$(HOT_SRCS))
+
+$(HOT_OBJS): EXTRA_OPT := $(HOT_OPT)
 EXAMPLES  := $(wildcard examples/*.c)
 EXAMPLE_OBJS := $(patsubst examples/%.c,$(BUILD)/examples/%.o,$(EXAMPLES))
 
@@ -60,7 +75,7 @@ $(TEST): $(TEST_OBJS) $(LIB)
 
 $(BUILD)/src/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(LIB_CFLAGS) -c -o $@ $<
+	$(CC) $(LIB_CFLAGS) $(EXTRA_OPT) -c -o $@ $<
 
 $(BUILD)/test/%.o: test/%.c
 	@mkdir -p $(dir $@)
