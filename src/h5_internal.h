@@ -12,12 +12,14 @@
 #include "h5_fixed.h"
 #include <stdint.h>
 
-/* Full sine period, one entry per sample of a 4096-step cycle. */
-#define H5_SINE_TABLE_SIZE 4096
+/* Full sine period, one entry per sample of a 1024-step cycle. The oscillator
+ * and the filter coefficient setup interpolate between entries, so this is
+ * the stored resolution only, not the output resolution. */
+#define H5_SINE_TABLE_SIZE 1024
 
-/* First quadrant plus both endpoints: indices 0..1024 inclusive. Stored in
+/* First quadrant plus both endpoints: indices 0..256 inclusive. Stored in
  * flash; the other quadrants are mirrored and negated at run time. */
-#define H5_SINE_QUAD_SIZE 1025
+#define H5_SINE_QUAD_SIZE 257
 
 /* Description of one (voice, param) entry. */
 struct h5_param_info {
@@ -30,11 +32,11 @@ struct h5_param_info {
 /* Single source of truth for parameter ranges, defaults and support. */
 extern const struct h5_param_info h5_param_table[H5_VOICE_COUNT][H5_PARAM_COUNT];
 
-/* First quadrant of the sine, Q15, for i = 0..1024. This is the only sine
+/* First quadrant of the sine, Q15, for i = 0..256. This is the only sine
  * data stored in the image; every other entry is derived from it. */
 extern const int16_t h5_sine_quad1[H5_SINE_QUAD_SIZE];
 
-/* The full 4096-entry period, allocated and rebuilt from h5_sine_quad1 on the
+/* The full 1024-entry period, allocated and rebuilt from h5_sine_quad1 on the
  * first h5_create_context(). Shared by every context. Null when the
  * allocation failed; the lookups then fall back to the quadrant. */
 extern int16_t *h5_sine;
@@ -43,23 +45,24 @@ extern int16_t *h5_sine;
  * called once, before any lookup. */
 void h5_sine_init(void);
 
-/* Q15 sine of 2*pi*i/4096 for any index, using the rebuilt table when it is
- * available and the quadrant fallback otherwise. The index must be 0..4095. */
+/* Q15 sine of 2*pi*i/H5_SINE_TABLE_SIZE for any index, using the rebuilt
+ * table when it is available and the quadrant fallback otherwise. The index
+ * must be 0..H5_SINE_TABLE_SIZE-1. */
 static inline int16_t h5_sine_at(uint32_t index)
 {
     if (h5_sine != 0) {
         return h5_sine[index];
     }
-    if (index <= 1024u) {
+    if (index <= 256u) {
         return h5_sine_quad1[index];
     }
-    if (index <= 2047u) {
-        return h5_sine_quad1[2048u - index];
+    if (index <= 511u) {
+        return h5_sine_quad1[512u - index];
     }
-    if (index <= 3071u) {
-        return (int16_t)-h5_sine_quad1[index - 2048u];
+    if (index <= 767u) {
+        return (int16_t)-h5_sine_quad1[index - 512u];
     }
-    return (int16_t)-h5_sine_quad1[4096u - index];
+    return (int16_t)-h5_sine_quad1[1024u - index];
 }
 
 /* Sine interpolation, linear, from the shared table. The 28-bit phase

@@ -4,7 +4,7 @@
  * Commands:
  *   --init              report the context size and the default sample rate
  *   --sine              verify the shared sine table against
- *                       sin(2*pi*i/4096) at all 4096 indices
+ *                       sin(2*pi*i/1024) at all 1024 indices
  *   --silence [path]    render silence, check it, and write a WAV file
  *   --api               verify the public API: context lifecycle, parameters,
  *                       mixer, triggers and render
@@ -135,7 +135,7 @@ static int command_sine(void)
             mismatches, (unsigned)H5_SINE_TABLE_SIZE, worst);
         failures++;
     } else {
-        ok("the rebuilt table matches sin(2*pi*i/4096) at all 4096 indices");
+        ok("the rebuilt table matches sin(2*pi*i/1024) at all 1024 indices");
     }
 
     if (fallback_mismatches != 0) {
@@ -146,10 +146,10 @@ static int command_sine(void)
 
     /* Only the first quadrant lives in the image; the full period is built
      * once, on the first h5_create_context(), and shared by every context. */
-    if ((H5_SINE_QUAD_SIZE * sizeof(int16_t)) != 2050u) {
-        fail("the sine quadrant is not 2050 bytes");
+    if ((H5_SINE_QUAD_SIZE * sizeof(int16_t)) != 514u) {
+        fail("the sine quadrant is not 514 bytes");
     } else {
-        ok("the sine quadrant is 2050 bytes (1025 x int16)");
+        ok("the sine quadrant is 514 bytes (257 x int16)");
     }
 
     {

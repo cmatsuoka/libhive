@@ -112,9 +112,10 @@ static void check_sine_interp(void)
     int bad = 0;
     int worst = 0;
 
-    /* Exact at integer table indices, including the wrap at 4095. */
-    for (i = 0; i < 4096u; i++) {
-        int32_t got = h5_sine_interp(i << 16);
+    /* Exact at integer table indices, including the wrap at 1023. A table
+     * step is 2^18 of the 28-bit phase. */
+    for (i = 0; i < H5_SINE_TABLE_SIZE; i++) {
+        int32_t got = h5_sine_interp(i << 18);
 
         if (got != (int32_t)h5_sine_at(i) * 65536) {
             if (bad < 4) {
@@ -123,13 +124,13 @@ static void check_sine_interp(void)
             bad++;
         }
     }
-    if (h5_sine_interp(1024u << 16) != 2147418112) {
+    if (h5_sine_interp(256u << 18) != 2147418112) {
         bad++;
     }
     if (bad != 0) {
         fail("sine interpolation is inexact at integer indices");
     } else {
-        ok("sine interpolation is exact at all 4096 integer indices");
+        ok("sine interpolation is exact at all 1024 integer indices");
     }
 
     /* Near the true sine at scattered fractional phases. */
