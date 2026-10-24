@@ -152,3 +152,84 @@ int32_t h5_svf_run(struct h5_svf_s *f, int32_t x)
     f->y1 = y;
     return y;
 }
+/*
+ * Swept-filter coefficient tables.
+ *
+ * The cutoff-following filters change coefficients every sample, but their
+ * cutoff moves smoothly. Recomputing tan/sin and the normalising divisions
+ * on every sample is therefore wasteful. Instead, the configure path fills a
+ * small table over the filter's actual cutoff range, and the audio path
+ * looks up and interpolates the coefficients.
+ *
+ * The table is RAM, built from the live parameters and sample rate when they
+ * change; nothing is added to the static image beyond these functions.
+ */
+void h5_sweep_build(struct h5_sweep_s *sw, int mode, int32_t q_q16,
+    int32_t lo_q16, int32_t hi_q16, uint32_t sample_rate)
+{
+    struct h5_svf_s tmp;
+    int64_t span;
+    int i;
+
+    sw->lo_q16 = lo_q16;
+    sw->mode = mode;
+
+    if (hi_q16 <= lo_q16) {
+        sw->enabled = 0;
+        h5_svf_tune(&tmp, mode, lo_q16, q_q16, sample_rate);
+        sw->point[0].b0 = tmp.b0;
+        sw->point[0].a1 = tmp.a1;
+        sw->point[0].a2 = tmp.a2;
+        return;
+    }
+
+    sw->enabled = 1;
+    span = (int64_t)hi_q16 - lo_q16;
+    sw->step_q32 = (int32_t)(((int64_t)(H5_SWEEP_POINTS - 1) << 32) / span);
+
+    for (i = 0; i < H5_SWEEP_POINTS; i++) {
+        int32_t fc = lo_q16
+            + (int32_t)((span * i) / (H5_SWEEP_POINTS - 1));
+
+        h5_svf_tune(&tmp, mode, fc, q_q16, sample_rate);
+        sw->point[i].b0 = tmp.b0;
+        sw->point[i].a1 = tmp.a1;
+        sw->point[i].a2 = tmp.a2;
+    }
+}
+
+void h5_sweep_apply(const struct h5_sweep_s *sw, int32_t cutoff_q16,
+    struct h5_svf_s *f)
+{
+    const struct h5_sweep_point *p0, *p1;
+    uint32_t pos, idx, frac;
+
+    if (!sw->enabled) {
+        p0 = &sw->point[0];
+        p1 = p0;
+        frac = 0u;
+    } else {
+        if (cutoff_q16 < sw->lo_q16) {
+            cutoff_q16 = sw->lo_q16;
+        }
+        pos = (uint32_t)h5_shr_round(
+            h5_mulwide(cutoff_q16 - sw->lo_q16, sw->step_q32), 16u);
+        if (pos >= ((uint32_t)(H5_SWEEP_POINTS - 1) << 16)) {
+            idx = H5_SWEEP_POINTS - 2u;
+            frac = 0xFFFFu;
+        } else {
+            idx = pos >> 16;
+            frac = pos & 0xFFFFu;
+        }
+        p0 = &sw->point[idx];
+        p1 = &sw->point[idx + 1u];
+    }
+
+    f->b0 = p0->b0 + (int32_t)h5_shr_round(
+        h5_mulwide(p1->b0 - p0->b0, (int32_t)frac), 16u);
+    f->a1 = p0->a1 + (int32_t)h5_shr_round(
+        h5_mulwide(p1->a1 - p0->a1, (int32_t)frac), 16u);
+    f->a2 = p0->a2 + (int32_t)h5_shr_round(
+        h5_mulwide(p1->a2 - p0->a2, (int32_t)frac), 16u);
+    f->mode = sw->mode;
+}

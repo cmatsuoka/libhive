@@ -199,6 +199,37 @@ void h5_svf_tune(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
 /* Advance one sample and return the Q31 output of the configured mode. */
 int32_t h5_svf_run(struct h5_svf_s *f, int32_t x);
 
+/* Number of points in a swept-filter coefficient table. The table is built
+ * at parameter/sample-rate change, so the audio path replaces the division-
+ * heavy h5_svf_tune() with a table lookup and three linear interpolations.
+ * Sixteen points over the filter's actual cutoff range keep the coefficient
+ * error far below audibility. */
+#define H5_SWEEP_POINTS 16
+
+struct h5_sweep_point {
+    int32_t b0;
+    int32_t a1;
+    int32_t a2;
+};
+
+struct h5_sweep_s {
+    struct h5_sweep_point point[H5_SWEEP_POINTS];
+    int32_t lo_q16;   /* cutoff at table index 0, Hz Q16 */
+    int32_t step_q32; /* index advance per Hz Q16, scaled by 2^32 */
+    int mode;         /* H5_SVF_* */
+    uint8_t enabled;  /* false when the cutoff never moves */
+};
+
+/* Build the coefficient table for a cutoff that sweeps from lo_q16 to
+ * hi_q16. Called only from configure paths, never from the audio loop. */
+void h5_sweep_build(struct h5_sweep_s *sw, int mode, int32_t q_q16,
+    int32_t lo_q16, int32_t hi_q16, uint32_t sample_rate);
+
+/* Load the coefficients for cutoff_q16 into f. Pure fixed-point arithmetic:
+ * no division, and only one multiplication per coefficient. */
+void h5_sweep_apply(const struct h5_sweep_s *sw, int32_t cutoff_q16,
+    struct h5_svf_s *f);
+
 /* Kick voice runtime state. The engine keeps its own copies of the parameters
  * it needs per sample so the audio path never reads the parameter matrix.
  * Engine outputs are Q30 (1.0 = 1 << 30) with one headroom bit for the
@@ -209,6 +240,7 @@ struct h5_kick_s {
     struct h5_env_s env_click;  /* burst AR^10: 1 ms, 0.2*NoiseDecay+0.1 */
     struct h5_noise_s noise;
     struct h5_svf_s noise_filter;
+    struct h5_sweep_s noise_sweep;
     struct h5_svf_s out_filter;
     uint32_t phase;          /* 28-bit tone oscillator phase */
     int32_t base_inc;        /* phase28 increment at TonePitch, no bend */
@@ -239,6 +271,7 @@ struct h5_tom_s {
     struct h5_env_s env_click; /* burst AR^10: 1 ms attack, 0.25*Decay */
     struct h5_noise_s noise;
     struct h5_svf_s noise_filter;
+    struct h5_sweep_s noise_sweep;
     struct h5_svf_s out_filter;
     uint32_t phase;        /* 28-bit tone oscillator phase */
     int32_t base_inc;      /* phase28 increment at TonePitch, no bend */
@@ -263,6 +296,7 @@ struct h5_snare_s {
     struct h5_noise_s noise;
     struct h5_svf_s rattle[4];  /* four fixed band-pass resonators */
     struct h5_svf_s out_filter; /* output low-pass at NoisePitch */
+    struct h5_sweep_s out_sweep; /* swept coefficients for out_filter */
     uint32_t phase;            /* 28-bit tone oscillator phase */
     int32_t base_inc;          /* phase28 increment at TonePitch, no bend */
     int32_t bend_q16;          /* pitch sweep depth in 12ths of an octave */
@@ -310,7 +344,7 @@ void h5_kick_init(struct h5_kick_s *k, uint32_t sample_rate);
 void h5_kick_configure(struct h5_kick_s *k,
     const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
 void h5_kick_trigger(struct h5_kick_s *k);
-int32_t h5_kick_process(struct h5_kick_s *k, uint32_t sample_rate);
+int32_t h5_kick_process(struct h5_kick_s *k);
 
 /* Tom engine. Times and controls are taken from the context's parameter
  * matrix; the noise generator is seeded per Tom instance and free-runs across
@@ -319,14 +353,14 @@ void h5_tom_init(struct h5_tom_s *t, h5_voice voice, uint32_t sample_rate);
 void h5_tom_configure(struct h5_tom_s *t,
     const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
 void h5_tom_trigger(struct h5_tom_s *t);
-int32_t h5_tom_process(struct h5_tom_s *t, uint32_t sample_rate);
+int32_t h5_tom_process(struct h5_tom_s *t);
 
 /* Snare engine. */
 void h5_snare_init(struct h5_snare_s *s, uint32_t sample_rate);
 void h5_snare_configure(struct h5_snare_s *s,
     const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
 void h5_snare_trigger(struct h5_snare_s *s);
-int32_t h5_snare_process(struct h5_snare_s *s, uint32_t sample_rate);
+int32_t h5_snare_process(struct h5_snare_s *s);
 
 /* Voice helpers used by the lifecycle, parameter and render entry points. */
 void h5_voice_init_all(struct h5_context_s *ctx);

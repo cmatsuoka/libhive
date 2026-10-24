@@ -126,13 +126,13 @@ int32_t h5_voice_process(struct h5_context_s *ctx, h5_voice voice)
     int tom = h5_tom_index(voice);
 
     if (voice == H5_VOICE_KICK) {
-        return h5_kick_process(&ctx->kick, ctx->sample_rate);
+        return h5_kick_process(&ctx->kick);
     }
     if (tom >= 0) {
-        return h5_tom_process(&ctx->tom[tom], ctx->sample_rate);
+        return h5_tom_process(&ctx->tom[tom]);
     }
     if (voice == H5_VOICE_SNARE) {
-        return h5_snare_process(&ctx->snare, ctx->sample_rate);
+        return h5_snare_process(&ctx->snare);
     }
     return 0;
 }

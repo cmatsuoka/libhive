@@ -177,6 +177,30 @@ static int32_t h5_pow10_q30(int32_t v)
     return (int32_t)h5_shr_round((int64_t)v8 * v2, 30u);
 }
 
+/* Cutoff laws for the three swept filters, in Hz Q16. env16 is the cubed
+ * envelope as Q16 (0..H5_Q16_ONE). These are called once per sample with the
+ * current envelope and, for the table builders, at the two endpoints. */
+static int32_t h5_sweep_cutoff(int32_t noise_pitch_q16, int32_t bend_q16,
+    int32_t env16)
+{
+    int32_t base = h5_sat_i32((int64_t)noise_pitch_q16
+        + h5_mul_q16(H5_NOISE_SWEEP_Q16, env16));
+
+    return h5_sat_i32((int64_t)base
+        * (int64_t)(H5_Q16_ONE
+            - h5_mul_q16(bend_q16, H5_Q16_ONE - env16))
+        >> 16);
+}
+
+static int32_t h5_snare_cutoff(int32_t noise_pitch_q16, int32_t sweep_q16,
+    int32_t env16)
+{
+    int32_t sweep = h5_mul_q16(H5_SNARE_SWEEP_DEPTH_Q16, sweep_q16);
+
+    return h5_mul_q16(noise_pitch_q16,
+        H5_Q16_ONE - h5_mul_q16(sweep, H5_Q16_ONE - env16));
+}
+
 /* Oscillator increment for f = TonePitch * 1.5^(Bend*env^3/12). env3 is the
  * cubed Q30 envelope; the product with the Q16 bend depth is scaled by
  * log2(1.5) and looked up in the semitone table, which realizes 2^(n/12). */
@@ -286,6 +310,11 @@ void h5_kick_configure(struct h5_kick_s *k,
     h5_pf_setup(&k->pf_k50, &k->pf_k20, &k->pf_k338, sample_rate);
     h5_svf_tune(&k->out_filter, H5_SVF_HP,
         H5_KICK_OUT_HP_HZ * H5_Q16_ONE, H5_KICK_OUT_Q16, sample_rate);
+    h5_sweep_build(&k->noise_sweep, H5_SVF_LP, H5_KICK_RESONANCE_Q16,
+        h5_sweep_cutoff(k->noise_pitch_q16, H5_KICK_FILTER_BEND_Q16, 0),
+        h5_sweep_cutoff(k->noise_pitch_q16, H5_KICK_FILTER_BEND_Q16,
+            H5_Q16_ONE),
+        sample_rate);
 }
 
 void h5_kick_trigger(struct h5_kick_s *k)
@@ -302,10 +331,10 @@ void h5_kick_trigger(struct h5_kick_s *k)
     k->active = 1u;
 }
 
-int32_t h5_kick_process(struct h5_kick_s *k, uint32_t sample_rate)
+int32_t h5_kick_process(struct h5_kick_s *k)
 {
     int32_t env_n, env_t, env_c, tone3, env3;
-    int32_t inc, s, s2, base, cutoff, u, nf, noise, trans, tone, sum;
+    int32_t inc, s, s2, cutoff, u, nf, noise, trans, tone, sum;
     int32_t blend, out;
 
     if (!k->active) {
@@ -340,16 +369,9 @@ int32_t h5_kick_process(struct h5_kick_s *k, uint32_t sample_rate)
     /* Noise band limit then swept low-pass:
      * fc_n = (NoisePitch + 2000*env_n^3) * (1 - 0.5*(1 - env_n^3)). */
     env3 = h5_cube_q30(env_n);
-    base = h5_sat_i32((int64_t)k->noise_pitch_q16
-        + h5_mul_q16(H5_NOISE_SWEEP_Q16, env3 >> 14));
-    cutoff = h5_sat_i32((int64_t)base
-        * (int64_t)(H5_Q16_ONE
-            - h5_mul_q16(H5_KICK_FILTER_BEND_Q16,
-                H5_Q16_ONE - (env3 >> 14)))
-        >> 16);
-
-    h5_svf_tune(&k->noise_filter, H5_SVF_LP, cutoff, H5_KICK_RESONANCE_Q16,
-        sample_rate);
+    cutoff = h5_sweep_cutoff(k->noise_pitch_q16, H5_KICK_FILTER_BEND_Q16,
+        env3 >> 14);
+    h5_sweep_apply(&k->noise_sweep, cutoff, &k->noise_filter);
     u = h5_prefilter(&k->pf_l50, &k->pf_l20, k->pf_k50, k->pf_k20,
         h5_noise_next(&k->noise));
     nf = h5_svf_run(&k->noise_filter, u);
@@ -472,6 +494,10 @@ void h5_tom_configure(struct h5_tom_s *t,
     h5_pf_setup(&t->pf_k50, &t->pf_k20, 0, sample_rate);
     h5_svf_tune(&t->out_filter, H5_SVF_HP,
         H5_TOM_OUT_HP_HZ * H5_Q16_ONE, H5_TOM_OUT_Q16, sample_rate);
+    h5_sweep_build(&t->noise_sweep, H5_SVF_LP, H5_TOM_RESONANCE_Q16,
+        h5_sweep_cutoff(t->noise_pitch_q16, t->filter_bend_q16, 0),
+        h5_sweep_cutoff(t->noise_pitch_q16, t->filter_bend_q16, H5_Q16_ONE),
+        sample_rate);
 }
 
 void h5_tom_trigger(struct h5_tom_s *t)
@@ -486,10 +512,10 @@ void h5_tom_trigger(struct h5_tom_s *t)
     t->active = 1u;
 }
 
-int32_t h5_tom_process(struct h5_tom_s *t, uint32_t sample_rate)
+int32_t h5_tom_process(struct h5_tom_s *t)
 {
     int32_t env, env_click, env3;
-    int32_t inc, s, s2, base, cutoff, u, nf, tone, noise, sum;
+    int32_t inc, s, s2, cutoff, u, nf, tone, noise, sum;
     int32_t body, click, mix, half, blended, out;
 
     if (!t->active) {
@@ -518,12 +544,9 @@ int32_t h5_tom_process(struct h5_tom_s *t, uint32_t sample_rate)
     s2 = h5_sine_interp((uint32_t)(s >> 5));
 
     /* fc_n = (NoisePitch + 2000*env^3)*(1 - FB*(1 - env^3)). */
-    base = h5_sat_i32((int64_t)t->noise_pitch_q16 +
-        h5_mul_q16(H5_NOISE_SWEEP_Q16, env3 >> 14));
-    cutoff = h5_sat_i32((int64_t)base * (int64_t)(H5_Q16_ONE -
-        h5_mul_q16(t->filter_bend_q16, H5_Q16_ONE - (env3 >> 14))) >> 16);
-
-    h5_svf_tune(&t->noise_filter, H5_SVF_LP, cutoff, H5_TOM_RESONANCE_Q16, sample_rate);
+    cutoff = h5_sweep_cutoff(t->noise_pitch_q16, t->filter_bend_q16,
+        env3 >> 14);
+    h5_sweep_apply(&t->noise_sweep, cutoff, &t->noise_filter);
     u = h5_prefilter(&t->pf_l50, &t->pf_l20, t->pf_k50, t->pf_k20, h5_noise_next(&t->noise));
     nf = h5_svf_run(&t->noise_filter, u);
 
@@ -646,6 +669,10 @@ void h5_snare_configure(struct h5_snare_s *sn,
         H5_SNARE_RATTLE_Q_4, sample_rate);
     h5_svf_tune(&sn->out_filter, H5_SVF_LP, params[H5_PARAM_NOISE_PITCH],
         H5_SNARE_OUT_Q16, sample_rate);
+    h5_sweep_build(&sn->out_sweep, H5_SVF_LP, H5_SNARE_OUT_Q16,
+        h5_snare_cutoff(sn->noise_pitch_q16, sn->sweep_q16, 0),
+        h5_snare_cutoff(sn->noise_pitch_q16, sn->sweep_q16, H5_Q16_ONE),
+        sample_rate);
 }
 
 void h5_snare_trigger(struct h5_snare_s *sn)
@@ -664,11 +691,11 @@ void h5_snare_trigger(struct h5_snare_s *sn)
     sn->active = 1u;
 }
 
-int32_t h5_snare_process(struct h5_snare_s *sn, uint32_t sample_rate)
+int32_t h5_snare_process(struct h5_snare_s *sn)
 {
     int32_t env, env_click, env3, inc, s, s2, u;
     int32_t tone, rattle, sum, body, click, mix, half, blended;
-    int32_t sweep, cutoff, out;
+    int32_t cutoff, out;
     size_t i;
 
     if (!sn->active) {
@@ -731,11 +758,8 @@ int32_t h5_snare_process(struct h5_snare_s *sn, uint32_t sample_rate)
 
     /* Sweep lowers the output cutoff as the body decays. The contour depth
      * is half the base cutoff at full Sweep. */
-    sweep = h5_mul_q16(H5_SNARE_SWEEP_DEPTH_Q16, sn->sweep_q16);
-    cutoff = h5_mul_q16(sn->noise_pitch_q16,
-        H5_Q16_ONE - h5_mul_q16(sweep, H5_Q16_ONE - (env3 >> 14)));
-    h5_svf_tune(&sn->out_filter, H5_SVF_LP, cutoff, H5_SNARE_OUT_Q16,
-        sample_rate);
+    cutoff = h5_snare_cutoff(sn->noise_pitch_q16, sn->sweep_q16, env3 >> 14);
+    h5_sweep_apply(&sn->out_sweep, cutoff, &sn->out_filter);
 
     out = h5_softclip_q31(blended);
 
