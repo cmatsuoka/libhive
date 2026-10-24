@@ -55,12 +55,25 @@ void h5_env_set_times(struct h5_env_s *e, int32_t attack_q16,
     if (rn < 1) {
         rn = 1;
     }
+
+    /* Attack and release lengths are int32_t, so cap them before scaling.
+     * This also bounds the delta division below: with len <= INT32_MAX the
+     * numerator (1 << 30) + len/2 is at most INT32_MAX and the quotient is
+     * at most 1 << 30, which keeps the whole calculation in 32 bits. */
+    if (an > INT32_MAX) {
+        an = INT32_MAX;
+    }
+    if (rn > INT32_MAX) {
+        rn = INT32_MAX;
+    }
     e->attack_len = (int32_t)an;
     e->release_len = (int32_t)rn;
 
     /* Deltas in Q30 per sample, rounded to the nearest LSB. */
-    e->delta_a = (int32_t)(((((int64_t)1 << 30) + (an >> 1))) / an);
-    e->delta_r = (int32_t)(((((int64_t)1 << 30) + (rn >> 1))) / rn);
+    e->delta_a = (int32_t)((((uint32_t)1 << 30) + (uint32_t)(an >> 1))
+        / (uint32_t)an);
+    e->delta_r = (int32_t)((((uint32_t)1 << 30) + (uint32_t)(rn >> 1))
+        / (uint32_t)rn);
 }
 
 void h5_env_trigger(struct h5_env_s *e)
