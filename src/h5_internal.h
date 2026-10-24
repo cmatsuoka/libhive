@@ -230,6 +230,18 @@ void h5_sweep_build(struct h5_sweep_s *sw, int mode, int32_t q_q16,
 void h5_sweep_apply(const struct h5_sweep_s *sw, int32_t cutoff_q16,
     struct h5_svf_s *f);
 
+/* Pitch-increment curve. The oscillator increment follows a smooth function
+ * of the cubed tone envelope, so it is precomputed at configure time over
+ * env3 = 0..1 and linearly interpolated per sample. H5_PITCH_POINTS + 1
+ * entries cover the closed interval; the table lives in the context, not in
+ * the static image. */
+#define H5_PITCH_POINTS 64
+#define H5_PITCH_SHIFT 24
+
+struct h5_pitch_curve_s {
+    int32_t inc[H5_PITCH_POINTS + 1];
+};
+
 /* Kick voice runtime state. The engine keeps its own copies of the parameters
  * it needs per sample so the audio path never reads the parameter matrix.
  * Engine outputs are Q30 (1.0 = 1 << 30) with one headroom bit for the
@@ -242,6 +254,7 @@ struct h5_kick_s {
     struct h5_svf_s noise_filter;
     struct h5_sweep_s noise_sweep;
     struct h5_svf_s out_filter;
+    struct h5_pitch_curve_s pitch_curve;
     uint32_t phase;          /* 28-bit tone oscillator phase */
     int32_t base_inc;        /* phase28 increment at TonePitch, no bend */
     int32_t bend_q16;        /* pitch sweep depth in 12ths of an octave */
@@ -273,6 +286,7 @@ struct h5_tom_s {
     struct h5_svf_s noise_filter;
     struct h5_sweep_s noise_sweep;
     struct h5_svf_s out_filter;
+    struct h5_pitch_curve_s pitch_curve;
     uint32_t phase;        /* 28-bit tone oscillator phase */
     int32_t base_inc;      /* phase28 increment at TonePitch, no bend */
     int32_t bend_q16;        /* pitch sweep depth in 12ths of an octave */
@@ -297,6 +311,7 @@ struct h5_snare_s {
     struct h5_svf_s rattle[4];  /* four fixed band-pass resonators */
     struct h5_svf_s out_filter; /* output low-pass at NoisePitch */
     struct h5_sweep_s out_sweep; /* swept coefficients for out_filter */
+    struct h5_pitch_curve_s pitch_curve;
     uint32_t phase;            /* 28-bit tone oscillator phase */
     int32_t base_inc;          /* phase28 increment at TonePitch, no bend */
     int32_t bend_q16;          /* pitch sweep depth in 12ths of an octave */

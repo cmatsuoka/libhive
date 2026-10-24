@@ -215,6 +215,42 @@ static int32_t h5_pitch_inc(int32_t base_inc, int32_t bend_q16, int32_t env3)
     return (int32_t)h5_shr_round(h5_mulwide(base_inc, ratio), 16u);
 }
 
+/* Fill the pitch-increment curve for one voice. Runs only from configure. */
+static void h5_pitch_build(struct h5_pitch_curve_s *curve, int32_t base_inc,
+    int32_t bend_q16)
+{
+    int i;
+
+    for (i = 0; i <= H5_PITCH_POINTS; i++) {
+        int32_t env3 = (int32_t)(((int64_t)i << 30) / H5_PITCH_POINTS);
+        int32_t inc = h5_pitch_inc(base_inc, bend_q16, env3);
+
+        curve->inc[i] = (inc < 1) ? 1 : inc;
+    }
+}
+
+/* Linear interpolation over the precomputed curve. env3 is Q30. */
+static int32_t h5_pitch_lookup(const struct h5_pitch_curve_s *curve,
+    int32_t env3)
+{
+    uint32_t index, frac;
+    int32_t a, b;
+
+    if (env3 <= 0) {
+        return curve->inc[0];
+    }
+    if (env3 >= (1 << 30)) {
+        return curve->inc[H5_PITCH_POINTS];
+    }
+
+    index = (uint32_t)env3 >> H5_PITCH_SHIFT;
+    frac = (uint32_t)env3 & ((1u << H5_PITCH_SHIFT) - 1u);
+    a = curve->inc[index];
+    b = curve->inc[index + 1u];
+    return a + (int32_t)h5_shr_round(h5_mulwide(b - a, (int32_t)frac),
+        H5_PITCH_SHIFT);
+}
+
 /* Per-band rattle weights (with the folded output scale), Q16. */
 static const int32_t h5_snare_rattle_weight[4] = {
     H5_SNARE_RATTLE_WEIGHT_1, H5_SNARE_RATTLE_WEIGHT_2,
@@ -298,6 +334,7 @@ void h5_kick_configure(struct h5_kick_s *k,
         inc = 1;
     }
     k->base_inc = (int32_t)inc;
+    h5_pitch_build(&k->pitch_curve, k->base_inc, k->bend_q16);
 
     /* Envelopes. The tone env drives both amplitude and pitch and starts
      * fast; the noise env shares the tone release; the click burst keeps
@@ -357,10 +394,7 @@ int32_t h5_kick_process(struct h5_kick_s *k)
     tone3 = h5_cube_q30(env_t);
 
     /* Pitch: f = TonePitch * 1.5^(Bend * tone3 / 12). */
-    inc = h5_pitch_inc(k->base_inc, k->bend_q16, tone3);
-    if (inc < 1) {
-        inc = 1;
-    }
+    inc = h5_pitch_lookup(&k->pitch_curve, tone3);
     k->phase = (k->phase + (uint32_t)inc) & 0x0FFFFFFFu;
 
     s = h5_sine_interp(k->phase);
@@ -485,6 +519,7 @@ void h5_tom_configure(struct h5_tom_s *t,
         inc = 1;
     }
     t->base_inc = (int32_t)inc;
+    h5_pitch_build(&t->pitch_curve, t->base_inc, t->bend_q16);
 
     /* Body envelope: AR^3 with a 0.005*Decay attack and the Decay release.
      * Transient envelope: AR^10, 1 ms attack, 0.25*Decay release. */
@@ -534,10 +569,7 @@ int32_t h5_tom_process(struct h5_tom_s *t)
     env3 = h5_cube_q30(env);
 
     /* Pitch envelope: f = TonePitch * 1.5^(Bend * env^3 / 12). */
-    inc = h5_pitch_inc(t->base_inc, t->bend_q16, env3);
-    if (inc < 1) {
-        inc = 1;
-    }
+    inc = h5_pitch_lookup(&t->pitch_curve, env3);
     t->phase = (t->phase + (uint32_t)inc) & 0x0FFFFFFFu;
 
     s = h5_sine_interp(t->phase);
@@ -650,6 +682,7 @@ void h5_snare_configure(struct h5_snare_s *sn,
         inc = 1;
     }
     sn->base_inc = (int32_t)inc;
+    h5_pitch_build(&sn->pitch_curve, sn->base_inc, sn->bend_q16);
 
     /* Body envelope: AR^3, 1 ms attack, Decay release. Transient: AR^10,
      * 1 ms attack, 0.2*Decay + 0.1 s release. */
@@ -714,10 +747,7 @@ int32_t h5_snare_process(struct h5_snare_s *sn)
     env3 = h5_cube_q30(env);
 
     /* Pitch envelope: f = TonePitch * 1.5^(Bend * env^3 / 12). */
-    inc = h5_pitch_inc(sn->base_inc, sn->bend_q16, env3);
-    if (inc < 1) {
-        inc = 1;
-    }
+    inc = h5_pitch_lookup(&sn->pitch_curve, env3);
     sn->phase = (sn->phase + (uint32_t)inc) & 0x0FFFFFFFu;
 
     s = h5_sine_interp(sn->phase);
