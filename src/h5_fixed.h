@@ -48,14 +48,6 @@ static inline int64_t h5_mulwide(int32_t a, int32_t b)
     return (int64_t)a * (int64_t)b;
 }
 
-/* Wide-product seam for a folded operand that does not fit in 32 bits, such
- * as the SVF feed-forward sum x ± 2*x1 + x2. Use h5_mulwide() for ordinary
- * sample and coefficient products. */
-static inline int64_t h5_mulwide64(int64_t a, int64_t b)
-{
-    return a * b;
-}
-
 /* Q31 x Q31 -> Q31, rounded to the nearest LSB and saturated. */
 static inline int32_t h5_mul_q31(int32_t a, int32_t b)
 {

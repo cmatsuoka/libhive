@@ -69,8 +69,20 @@ void h5_svf_tune(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
     }
 
     s = h5_sine_interp((uint32_t)phase);
-    /* cos(w) = sin(w + pi/2): a quarter turn is 2^26 of the 28-bit phase. */
-    c = h5_sine_interp((uint32_t)((phase + 0x04000000u) & 0x0FFFFFFFu));
+
+    /* Derive cos(w) from the half-angle identity
+     *     1 - cos(w) = 2 * sin^2(w/2).
+     * Looking cos(w) up directly at the quarter turn lands on the sine
+     * table's peak, where Q15 quantisation is coarser than 1-cos(w) at low
+     * cutoffs. The half-angle sine is near zero there, so its interpolation
+     * error is much smaller and the low-frequency poles stay accurate. */
+    {
+        int32_t sin_half = h5_sine_interp((uint32_t)(phase >> 1));
+        int64_t one_minus_cos = 2 * h5_shr_round(
+            (int64_t)sin_half * (int64_t)sin_half, 31u);
+
+        c = ((int64_t)1 << 31) - one_minus_cos;
+    }
 
     /* alpha = sin(w) / (2*Q), Q30. s is sin*2^31-scaled and Q is Q16, so
      * alpha_q30 = s * 2^14 / Q_q16. */
@@ -82,7 +94,7 @@ void h5_svf_tune(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
 
     switch (mode) {
     case H5_SVF_HP:
-        pre = ((((int64_t)1 << 30) + (c >> 1) + 1) >> 1);
+        pre = ((((int64_t)1 << 31) + c + 2) >> 2);
         num = (pre << 30) / a0;
         b0 = (int32_t)num;
         f->b0 = b0;
@@ -96,7 +108,7 @@ void h5_svf_tune(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
         f->mode = mode;
         break;
     default:
-        pre = ((((int64_t)1 << 30) - (c >> 1) + 1) >> 1);
+        pre = ((((int64_t)1 << 31) - c + 2) >> 2);
         num = (pre << 30) / a0;
         b0 = (int32_t)num;
         f->b0 = b0;
@@ -110,23 +122,23 @@ int32_t h5_svf_run(struct h5_svf_s *f, int32_t x)
     int64_t ff, fb;
     int32_t y;
 
-    /* Feed-forward, folded on the stored identities: LP/HP have b2 = b0
-     * and b1 = ±2*b0, BP has b1 = 0 and b2 = -b0. One wide multiply
-     * replaces two or three; int64 arithmetic makes the fold exact, so
-     * the accumulator and the output are unchanged. */
+    /* Feed-forward, expanded on the stored identities: LP/HP have b2 = b0
+     * and b1 = +/-2*b0, BP has b1 = 0 and b2 = -b0. Three 32x32 -> 64
+     * products avoid a multiply with a wider-than-32-bit operand, which
+     * some small cores have to emulate. The sum is exact. */
     switch (f->mode) {
     case H5_SVF_HP:
-        ff = h5_mulwide64((int64_t)f->b0,
-            (int64_t)x - 2 * (int64_t)f->x1 + (int64_t)f->x2);
+        ff = h5_mulwide(f->b0, x)
+            - 2 * h5_mulwide(f->b0, f->x1)
+            + h5_mulwide(f->b0, f->x2);
         break;
     case H5_SVF_BP:
-        /* Two 32x32 products: x - x2 can exceed int32, so folding it into a
-         * single h5_mulwide() operand would overflow before the multiply. */
         ff = h5_mulwide(f->b0, x) - h5_mulwide(f->b0, f->x2);
         break;
     default:
-        ff = h5_mulwide64((int64_t)f->b0,
-            (int64_t)x + 2 * (int64_t)f->x1 + (int64_t)f->x2);
+        ff = h5_mulwide(f->b0, x)
+            + 2 * h5_mulwide(f->b0, f->x1)
+            + h5_mulwide(f->b0, f->x2);
         break;
     }
     fb = h5_mulwide(f->a1, f->y1)

@@ -41,6 +41,7 @@ TEST_OBJS := $(patsubst test/%.c,$(BUILD)/test/%.o,$(TEST_SRCS))
 # Size-first default, but keep the per-sample DSP translation units at -O2.
 # The lifecycle and parameter-table files are cold and stay at $(OPT).
 HOT_SRCS := \
+	src/h5.c \
 	src/h5_engines.c \
 	src/h5_filter.c \
 	src/h5_fixed.c \
@@ -51,6 +52,7 @@ HOT_SRCS := \
 HOT_OBJS := $(patsubst src/%.c,$(BUILD)/src/%.o,$(HOT_SRCS))
 
 $(HOT_OBJS): EXTRA_OPT := $(HOT_OPT)
+
 EXAMPLES  := $(wildcard examples/*.c)
 EXAMPLE_OBJS := $(patsubst examples/%.c,$(BUILD)/examples/%.o,$(EXAMPLES))
 
