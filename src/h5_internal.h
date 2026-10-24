@@ -21,12 +21,15 @@
  * flash; the other quadrants are mirrored and negated at run time. */
 #define H5_SINE_QUAD_SIZE 257
 
-/* Description of one (voice, param) entry. */
+/* Description of one (voice, param) entry. An unsupported entry uses
+ * H5_PARAM_UNSUPPORTED as its minimum, which also removes the per-entry
+ * support flag and its struct padding. */
+#define H5_PARAM_UNSUPPORTED INT32_MIN
+
 struct h5_param_info {
     int32_t min;
     int32_t max;
     int32_t default_value;
-    bool supported;
 };
 
 /* Single source of truth for parameter ranges, defaults and support. */
