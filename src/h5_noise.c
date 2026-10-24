@@ -1,14 +1,14 @@
 /*
  * h5_noise.c - 32-bit LCG noise with a 48 kHz-target sample-and-hold.
  *
- * Exact reproduction of the documented noise primitive:
+ * The noise primitive is:
  *
  *     X[n+1] = (1103515245 * X[n] + 12345) mod 2^32
  *     u[n]   = X[n] / 2^31                          signed, [-1, 1)
  *     D      = max(1, sample_rate / 48000)          integer division
  *
  * The LCG advances once per output sample; the value is sampled only when
- * the hold phase is zero, matching the documented downSample/sAndH pair. D is
+ * the hold phase is zero (a sample-and-hold decimator). D is
  * the integer division sample_rate / 48000, so the held rate is
  * sample_rate / D: exactly 48 kHz only when the render rate is an integer
  * multiple of 48 kHz (48 kHz, 96 kHz, ...). At 44.1 kHz D is 1 and the held

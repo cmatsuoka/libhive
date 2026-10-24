@@ -1,7 +1,7 @@
 /*
  * h5_fixed.c - linear AR envelope state machine.
  *
- * Reproduces the documented linear attack/release envelope: a linear rise
+ * Implements a linear attack/release envelope: a linear rise
  * over `attack_len` samples to exactly 1.0 (Q30), then a linear fall over
  * `release_len` samples to zero, then silence. The per-sample deltas are
  * computed once per parameter change (h5_env_set_times), never per sample;

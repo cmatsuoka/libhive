@@ -18,60 +18,63 @@
 #define F(num, den) ((int32_t)(((int64_t)(num) * Q + ((den) / 2u)) / (den)))
 
 const struct h5_param_info h5_param_table[H5_VOICE_COUNT][H5_PARAM_COUNT] = {
+    /* Factory sound defaults: each voice loads its stock tuning, so the
+     * instrument sounds right with no host interaction. */
+
     [H5_VOICE_KICK] = {
-        [H5_PARAM_NOISE_PITCH] = { I(900), I(16000), I(11000), true },
-        [H5_PARAM_TONE_PITCH]  = { I(10),  I(440),   I(20),    true },
-        [H5_PARAM_BEND]        = { I(-62), I(62),    I(48),    true },
-        [H5_PARAM_DECAY]       = { F(1, 10), F(2, 1), F(4, 10), true },
-        [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(9, 10), true },
-        [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(1, 2),  true },
+        [H5_PARAM_NOISE_PITCH] = { I(900), I(16000), I(8570),  true },
+        [H5_PARAM_TONE_PITCH]  = { I(10),  I(440),   F(41881, 1000), true },
+        [H5_PARAM_BEND]        = { I(-62), I(62),    I(62),    true },
+        [H5_PARAM_DECAY]       = { F(1, 10), F(2, 1), F(3, 10), true },
+        [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(95, 100), true },
+        [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(7, 10),  true },
         [H5_PARAM_SWEEP]       = { 0,      0,        0,        false },
         [H5_PARAM_VOLUME]      = { 0,      Q,        Q / 2,    true },
         [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
     },
     [H5_VOICE_SNARE] = {
-        [H5_PARAM_NOISE_PITCH] = { I(900), I(14000), I(10000), true },
-        [H5_PARAM_TONE_PITCH]  = { I(28),  I(880),   I(110),   true },
-        [H5_PARAM_BEND]        = { I(-62), I(62),    I(20),    true },
-        [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(1, 1), true },
-        [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(7, 10), true },
-        [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(7, 10), true },
-        [H5_PARAM_SWEEP]       = { 0,      Q,        F(1, 2),  true },
-        [H5_PARAM_VOLUME]      = { 0,      Q,        Q / 2,    true },
+        [H5_PARAM_NOISE_PITCH] = { I(900), I(14000), I(10558), true },
+        [H5_PARAM_TONE_PITCH]  = { I(28),  I(880),   F(958, 10), true },
+        [H5_PARAM_BEND]        = { I(-62), I(62),    I(25),    true },
+        [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(135, 100), true },
+        [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(3, 4),  true },
+        [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(79, 100), true },
+        [H5_PARAM_SWEEP]       = { 0,      Q,        F(31, 50), true },
+        [H5_PARAM_VOLUME]      = { 0,      Q,        F(59, 100), true },
         [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
     },
     [H5_VOICE_TOM_1] = {
-        [H5_PARAM_NOISE_PITCH] = { I(900), I(16000), I(11000), true },
-        [H5_PARAM_TONE_PITCH]  = { I(28),  I(880),   F(661, 2),    true },
-        [H5_PARAM_BEND]        = { I(-62), I(62),    I(20),    true },
-        [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(1, 1), true },
-        [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(7, 10), true },
-        [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(7, 10), true },
+        [H5_PARAM_NOISE_PITCH] = { I(900), I(16000), I(7807), true },
+        [H5_PARAM_TONE_PITCH]  = { I(28),  I(880),   F(661, 2), true },
+        [H5_PARAM_BEND]        = { I(-62), I(62),    I(24),    true },
+        [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(3, 4),  true },
+        [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(19, 25), true },
+        [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(39, 50), true },
         [H5_PARAM_SWEEP]       = { 0,      0,        0,        false },
-        [H5_PARAM_VOLUME]      = { 0,      Q,        Q / 2,    true },
-        [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
+        [H5_PARAM_VOLUME]      = { 0,      Q,        F(47, 100), true },
+        [H5_PARAM_PAN]         = { 0,      Q,        F(23, 50), true },
     },
     [H5_VOICE_TOM_2] = {
-        [H5_PARAM_NOISE_PITCH] = { I(900), I(16000), I(11000), true },
+        [H5_PARAM_NOISE_PITCH] = { I(900), I(16000), I(8377), true },
         [H5_PARAM_TONE_PITCH]  = { I(28),  I(880),   F(1897, 10), true },
-        [H5_PARAM_BEND]        = { I(-62), I(62),    I(20),    true },
-        [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(1, 1), true },
-        [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(7, 10), true },
-        [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(7, 10), true },
+        [H5_PARAM_BEND]        = { I(-62), I(62),    I(24),    true },
+        [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(71, 100), true },
+        [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(77, 100), true },
+        [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(37, 50), true },
         [H5_PARAM_SWEEP]       = { 0,      0,        0,        false },
         [H5_PARAM_VOLUME]      = { 0,      Q,        Q / 2,    true },
-        [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
+        [H5_PARAM_PAN]         = { 0,      Q,        F(12, 25), true },
     },
     [H5_VOICE_TOM_3] = {
-        [H5_PARAM_NOISE_PITCH] = { I(900), I(16000), I(11000), true },
+        [H5_PARAM_NOISE_PITCH] = { I(900), I(16000), I(8398), true },
         [H5_PARAM_TONE_PITCH]  = { I(28),  I(880),   F(1144, 10), true },
-        [H5_PARAM_BEND]        = { I(-62), I(62),    I(20),    true },
-        [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(1, 1), true },
-        [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(7, 10), true },
-        [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(7, 10), true },
+        [H5_PARAM_BEND]        = { I(-62), I(62),    I(24),    true },
+        [H5_PARAM_DECAY]       = { F(2, 10), F(5, 1), F(73, 100), true },
+        [H5_PARAM_NOISE_TONE]  = { 0,      Q,        F(77, 100), true },
+        [H5_PARAM_CLICK_TONE]  = { 0,      Q,        F(18, 25), true },
         [H5_PARAM_SWEEP]       = { 0,      0,        0,        false },
         [H5_PARAM_VOLUME]      = { 0,      Q,        Q / 2,    true },
-        [H5_PARAM_PAN]         = { 0,      Q,        Q / 2,    true },
+        [H5_PARAM_PAN]         = { 0,      Q,        F(59, 100), true },
     },
 };
 
@@ -109,7 +112,9 @@ h5_status h5_set_param(h5_context handle, h5_voice voice, h5_param param,
     }
 
     ctx->voice_params[voice][param] = clamped;
-    if (param != H5_PARAM_VOLUME && param != H5_PARAM_PAN) {
+    if (param == H5_PARAM_VOLUME || param == H5_PARAM_PAN) {
+        h5_mix_update(ctx, voice);
+    } else {
         h5_voice_configure(ctx, voice);
     }
     return status;

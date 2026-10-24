@@ -18,6 +18,7 @@
  * Regenerate the table with: python3 tools/gen_sine_table.py
  */
 
+#include <stdint.h>
 #include <stdlib.h>
 
 #include "h5_internal.h"
@@ -263,6 +264,30 @@ int32_t h5_semitone_ratio(int semitones)
     return h5_semitone[semitones + H5_SEMITONE_MAX];
 }
 
+/* tan(pi * f / sr) as Q16 from the shared sine table. theta = pi*f/sr maps
+ * into the table as the fraction theta/(2*pi) = f/(2*sr); the cosine comes
+ * from a quarter-turn offset in phase. Used for the one-pole pre-filter
+ * coefficients at parameter change only. */
+int32_t h5_tanpi_q16(int32_t f_q16, uint32_t sample_rate)
+{
+    int64_t phase;
+    int32_t s, c;
+
+    if (sample_rate == 0u) {
+        return H5_Q16_ONE;
+    }
+    phase = ((int64_t)f_q16 << 11) / (int64_t)sample_rate;
+    if (phase > INT32_MAX) {
+        phase = INT32_MAX;
+    }
+    s = h5_sine_interp((uint32_t)phase);
+    c = h5_sine_interp((uint32_t)(phase + (1 << 26)));
+    if (c == 0) {
+        return INT32_MAX;
+    }
+    return h5_sat_i32(((int64_t)s * H5_Q16_ONE) / c);
+}
+
 /*
  * x^0.7 as Q16.16 for x = j/64, j = 0..64. The drum voices use this
  * exponent for the NoiseTone and Click controls. Linear interpolation
@@ -322,55 +347,49 @@ int32_t h5_semitone_ratio_interp(int32_t semitones_q16)
 }
 
 /*
- * Soft-clip shaper: tanh(u) as Q15 for u = j/64, j = 0..96, i.e. the shaper's
- * actual tanh argument range [0, 1.5) in Q29 with 97 uniform steps. There is
- * no dead tail: the shaper's |u| never exceeds 1.5. Negative arguments are
- * negated via odd symmetry; the top entry is tanh(96/64) = tanh(1.5) ~=
- * 0.90515.
+ * Soft-clip shaper: the engine output gain is 1.5 * tanh(u), with the lookup
+ * table holding tanh(u) as Q15 for u = j/H5_SOFTCLIP_STEPS. The input is the
+ * Q30 mix with one headroom bit, so u = |m| / 2^31 stays in [0, 1] and the
+ * 49-entry table ends at tanh(1). The 1.5 gain is applied after the
+ * interpolation (entry * 1.5 << 15 turns the Q15 tanh into a Q30 result), so
+ * the function returns 1.5 * tanh(u) in Q30 with headroom to 2.0. Negative
+ * arguments are negated via odd symmetry.
  * Regenerate with: python3 tools/gen_softclip_table.py
  */
 const int16_t h5_softclip[H5_SOFTCLIP_SIZE] = {
-         0,    512,   1024,   1535,   2045,   2555,   3063,   3570,
-      4075,   4578,   5079,   5577,   6073,   6566,   7056,   7542,
-      8025,   8505,   8980,   9452,   9919,  10382,  10840,  11294,
-     11742,  12186,  12625,  13058,  13486,  13908,  14325,  14737,
-     15142,  15542,  15936,  16324,  16706,  17081,  17451,  17815,
-     18173,  18524,  18869,  19208,  19541,  19868,  20189,  20503,
-     20812,  21114,  21411,  21701,  21986,  22264,  22537,  22804,
-     23065,  23320,  23570,  23815,  24053,  24287,  24515,  24738,
-     24955,  25168,  25375,  25578,  25775,  25968,  26156,  26339,
-     26518,  26693,  26863,  27029,  27190,  27348,  27501,  27650,
-     27796,  27937,  28075,  28210,  28340,  28468,  28592,  28712,
-     28829,  28943,  29054,  29162,  29267,  29369,  29469,  29565,
-     29659
+         0,    683,   1365,   2045,   2724,   3401,   4075,   4745,
+      5411,   6073,   6729,   7380,   8025,   8664,   9295,   9919,
+     10535,  11143,  11742,  12333,  12914,  13486,  14048,  14600,
+     15142,  15674,  16195,  16706,  17205,  17694,  18173,  18640,
+     19096,  19541,  19976,  20399,  20812,  21214,  21605,  21986,
+     22356,  22715,  23065,  23404,  23734,  24053,  24363,  24664,
+     24955
 };
 
-/*
- * Shaper: tanh(1.5 * m) for a Q31 input m. The tanh argument u = 1.5 * m
- * lives in Q29 (m Q31 -> u = (3 * m) >> 3); with Q31 inputs |u| <= 1.5, so
- * the lookup spans the table's [0, 1.5) domain and never needs the missing
- * tail. Negative m uses odd symmetry over the positive branch. The
- * interpolation is computed in Q31 directly, so the fractional contribution
- * keeps sub-Q15-LSB precision.
- */
 int32_t h5_softclip_q31(int32_t m)
 {
-    uint64_t ua;
+    uint64_t w;
     uint32_t idx, frac;
-    int32_t y0, y1;
+    int32_t y0, y1, interp;
     int64_t v;
     int neg = m < 0;
 
-    ua = (uint32_t)((neg ? -(int64_t)m : (int64_t)m) * 3 >> 3);
-    idx = (uint32_t)(ua >> 23);
-    if (idx > (H5_SOFTCLIP_SIZE - 1u)) {
-        idx = H5_SOFTCLIP_SIZE - 1u;
+    /* w = |m| * STEPS in Q31 u-units: the entry index is w >> 31 and the
+     * fractional part is bits 30..15 of w. */
+    w = (uint64_t)(neg ? -(int64_t)m : (int64_t)m)
+        * (uint64_t)H5_SOFTCLIP_STEPS;
+    idx = (uint32_t)(w >> 31);
+    frac = (uint32_t)((w >> 15) & 0xFFFFu);
+    if (idx > (H5_SOFTCLIP_SIZE - 2u)) {
+        idx = H5_SOFTCLIP_SIZE - 2u;
+        frac = 0xFFFFu;
     }
-    frac = (uint32_t)((ua & 0x7FFFFFu) >> 7);
     y0 = h5_softclip[idx];
-    y1 = (idx < (H5_SOFTCLIP_SIZE - 1u)) ? h5_softclip[idx + 1] : y0;
-    v = (int64_t)y0 * 65536
-        + h5_mulwide(y1 - y0, (int32_t)frac);
+    y1 = h5_softclip[idx + 1];
+    interp = y0 + (int32_t)h5_shr_round(h5_mulwide(y1 - y0, (int32_t)frac),
+        16u);
+    /* Q15 tanh * (1.5 << 15) = Q30 result (1.0 = 1 << 30, max 1.5). */
+    v = (int64_t)interp * 49152;
     v = h5_sat_i32(v);
     return neg ? -v : v;
 }

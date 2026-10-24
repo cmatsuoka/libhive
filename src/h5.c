@@ -27,6 +27,7 @@ static void h5_init_defaults(struct h5_context_s *ctx)
             ctx->voice_params[v][p] = h5_param_table[v][p].default_value;
         }
     }
+    h5_mix_update_all(ctx);
 }
 
 h5_context h5_create_context(uint32_t sample_rate)

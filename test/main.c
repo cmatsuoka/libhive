@@ -330,10 +330,10 @@ static int command_api(void)
         fail("h5_param_supported() wrongly reports Snare Sweep unsupported");
     } else if (h5_get_param((h5_context)ctx, H5_VOICE_SNARE,
             H5_PARAM_SWEEP, &value) != H5_OK ||
-        value != H5_Q16_ONE / 2) {
-        fail("Snare Sweep does not default to 0.5");
+        value != 31 * H5_Q16_ONE / 50) {
+        fail("Snare Sweep does not default to 0.62");
     } else {
-        ok("Snare Sweep is supported with the default 0.5");
+        ok("Snare Sweep is supported with the default 0.62");
     }
     if (h5_param_supported(H5_VOICE_COUNT, H5_PARAM_DECAY) ||
         h5_param_supported(H5_VOICE_KICK, H5_PARAM_COUNT)) {
@@ -407,6 +407,9 @@ static int command_api(void)
     if (status != H5_OK || value != H5_Q16_ONE / 4) {
         fail("a volume written by h5_set_param() is not visible through"
             " h5_get_instrument_volume()");
+    } else if (ctx->mix_left[H5_VOICE_SNARE] != H5_Q16_ONE / 4 ||
+        ctx->mix_right[H5_VOICE_SNARE] != 0) {
+        fail("h5_set_param() did not refresh the cached mixer gains");
     } else {
         ok("the mixer controls are settable via h5_set_param()");
     }
@@ -440,9 +443,30 @@ static int command_api(void)
         ok("h5_reset() restores mixer defaults");
     }
 
+    /* h5_reset() also refreshes the cached stereo gains derived from them. */
+    {
+        h5_voice v;
+        int stale = 0;
+
+        for (v = 0; v < H5_VOICE_COUNT; v++) {
+            int32_t volume = ctx->voice_params[v][H5_PARAM_VOLUME];
+            int32_t pan = ctx->voice_params[v][H5_PARAM_PAN];
+
+            if (ctx->mix_left[v] != h5_mul_q16(volume, H5_Q16_ONE - pan) ||
+                ctx->mix_right[v] != h5_mul_q16(volume, pan)) {
+                stale++;
+            }
+        }
+        if (stale != 0) {
+            fail("h5_reset() left stale mixer gains");
+        } else {
+            ok("h5_reset() refreshes the mixer gains");
+        }
+    }
+
     /* h5_reset() restores parameter defaults. */
     if (ctx->voice_params[H5_VOICE_KICK][H5_PARAM_TONE_PITCH] !=
-        20 * H5_Q16_ONE) {
+        2744713) {  /* 41.881 Hz as Q16 (round-half-up) */
         fail("h5_reset() did not restore Kick TonePitch default");
     } else {
         ok("h5_reset() restores parameter defaults");

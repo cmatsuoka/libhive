@@ -508,13 +508,14 @@ static void check_softclip(void)
         ok("the shaper is odd-symmetric");
     }
 
-    /* Monotone and close to tanh(1.5 * m) over the full int32 range. */
+    /* Monotone and close to 1.5 * tanh(m) over the full int32 range, in
+     * Q30 (1.0 = 1 << 30; the result peaks at 1.5 for hot arguments). */
     bad = 0;
     worst = 0;
     for (k = 0; k < 4096; k++) {
         int32_t m = (int32_t)((int64_t)k * 1048576 - 2147483648LL);
-        double exact = tanh(1.5 * (double)m / 2147483648.0);
-        int32_t expected = (int32_t)(exact * DSP_SCALE);
+        double exact = tanh(1.0 * (double)m / 2147483648.0);
+        int32_t expected = (int32_t)(1.5 * exact * 1073741824.0);
         int32_t got = h5_softclip_q31(m);
         int err = got - expected;
 
@@ -534,9 +535,10 @@ static void check_softclip(void)
         }
     }
     if (worst <= 262144 && bad == 0) {
-        printf("ok  : shaper tracks tanh(1.5 x) (worst %d LSB)\n", worst);
+        printf("ok  : shaper tracks 1.5*tanh(x) in Q30 (worst %d LSB)\n",
+            worst);
     } else {
-        printf("FAIL: shaper deviates from tanh(1.5 x) (worst %d LSB)\n",
+        printf("FAIL: shaper deviates from 1.5*tanh(x) (worst %d LSB)\n",
             worst);
         failures++;
     }
