@@ -86,8 +86,6 @@ void h5_svf_tune(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
         num = (pre << 30) / a0;
         b0 = (int32_t)num;
         f->b0 = b0;
-        f->b1 = -2 * b0;
-        f->b2 = b0;
         f->mode = mode;
         break;
     case H5_SVF_BP:
@@ -95,8 +93,6 @@ void h5_svf_tune(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
         num = (pre << 30) / a0;
         b0 = (int32_t)num;
         f->b0 = b0;
-        f->b1 = 0;
-        f->b2 = -b0;
         f->mode = mode;
         break;
     default:
@@ -104,8 +100,6 @@ void h5_svf_tune(struct h5_svf_s *f, int mode, int32_t cutoff_q16,
         num = (pre << 30) / a0;
         b0 = (int32_t)num;
         f->b0 = b0;
-        f->b1 = 2 * b0;
-        f->b2 = b0;
         f->mode = H5_SVF_LP;
         break;
     }

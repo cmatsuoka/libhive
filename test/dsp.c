@@ -632,26 +632,6 @@ static void check_filter(void)
     int bad;
     double phase, step;
 
-    /* Numerator identities per mode. */
-    bad = 0;
-    test_svf_set(&f, H5_SVF_LP, fc_q16, one_q16, DSP_SR);
-    if (f.b2 != f.b0 || f.b1 != 2 * f.b0) {
-        bad = 1;
-    }
-    test_svf_set(&f, H5_SVF_HP, fc_q16, one_q16, DSP_SR);
-    if (f.b2 != f.b0 || f.b1 != -2 * f.b0) {
-        bad = 1;
-    }
-    test_svf_set(&f, H5_SVF_BP, fc_q16, one_q16, DSP_SR);
-    if (f.b1 != 0 || f.b2 != -f.b0) {
-        bad = 1;
-    }
-    if (bad) {
-        fail("the filter numerator identities do not hold");
-    } else {
-        ok("the filter numerators match the mode identities");
-    }
-
     /* LP DC gain converges to unity. The bound accounts for Q30
      * coefficient quantization: denominator 1 + a1 + a2 suffers the same
      * cancellation the exact filter cancels to zero, so the quantized DC

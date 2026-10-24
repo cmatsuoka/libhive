@@ -171,7 +171,7 @@ enum {
 /* Second-order resonant filter, direct-form I. Coefficients are Q30
  * (Q31 samples, 64-bit products); a1 approaches -2. */
 struct h5_svf_s {
-    int32_t b0, b1, b2; /* Q30 numerators */
+    int32_t b0;         /* Q30 numerator; b1/b2 follow from b0 and mode */
     int32_t a1, a2;     /* Q30 normalised denominators */
     int32_t x1, x2, y1, y2; /* Q31 state */
     int32_t mode;       /* H5_SVF_*; the run loop folds the feed-forward
