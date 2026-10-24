@@ -289,6 +289,11 @@ struct h5_context_s {
     int32_t mix_left[H5_VOICE_COUNT];
     int32_t mix_right[H5_VOICE_COUNT];
 
+    /* Bit i is set while voice i is sounding. h5_process() only visits the
+     * set bits, so silent voices cost nothing beyond the trigger bookkeeping.
+     * Bits are cleared as their engines finish during rendering. */
+    uint32_t active_mask;
+
     /* Voice runtime state, initialized by h5_voice_init_all(). The Toms are
      * three independent instances of the same engine. */
     struct h5_kick_s kick;
@@ -330,6 +335,9 @@ void h5_voice_trigger_instrument(struct h5_context_s *ctx,
     h5_instrument instrument);
 
 int32_t h5_voice_process(struct h5_context_s *ctx, h5_voice voice);
+
+/* True while the named voice's engine still has output to render. */
+bool h5_voice_is_active(const struct h5_context_s *ctx, h5_voice voice);
 
 /* Add one instrument's mono Q31 output to the 64-bit stereo accumulators,
  * applying its mixer volume and pan. */

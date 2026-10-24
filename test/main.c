@@ -503,11 +503,38 @@ static int command_api(void)
     }
 
     /* Trigger validation. */
+    if (h5_is_active((h5_context)ctx)) {
+        fail("h5_is_active() reports activity before any trigger");
+    } else {
+        ok("h5_is_active() is false before any trigger");
+    }
+
     status = h5_trigger((h5_context)ctx, H5_INSTR_KICK);
     if (status != H5_OK) {
         fail("h5_trigger(Kick) did not return OK");
     } else {
         ok("h5_trigger() accepts a valid instrument");
+    }
+
+    if (!h5_is_active((h5_context)ctx)) {
+        fail("h5_is_active() does not report a triggered voice");
+    } else {
+        ok("h5_is_active() reports a triggered voice");
+    }
+
+    {
+        size_t elapsed = 0u;
+        const size_t limit = 3u * 48000u;
+
+        while (h5_is_active((h5_context)ctx) && elapsed < limit) {
+            h5_process((h5_context)ctx, block, 32u);
+            elapsed += 32u;
+        }
+        if (h5_is_active((h5_context)ctx)) {
+            fail("h5_is_active() still reports activity after the release");
+        } else {
+            ok("h5_is_active() returns to idle after the release");
+        }
     }
 
     status = h5_trigger((h5_context)ctx, H5_INSTR_COUNT);
@@ -536,6 +563,12 @@ static int command_api(void)
         fail("h5_trigger(NULL, ...) did not return INVALID_CONTEXT");
     } else {
         ok("h5_trigger() rejects a NULL context");
+    }
+
+    if (h5_is_active(0)) {
+        fail("h5_is_active(NULL) reports activity");
+    } else {
+        ok("h5_is_active(NULL) is false");
     }
 
     h5_destroy_context((h5_context)ctx);

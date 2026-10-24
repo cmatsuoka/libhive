@@ -14,6 +14,16 @@
 
 #define H5_CLEAR_CHUNK 4096u
 
+/* The render loop maps each active voice bit to its instrument index by a
+ * cast, so the two public enums must keep the same order and size. */
+typedef char h5_voice_instrument_order_check[
+    ((int)H5_VOICE_KICK == (int)H5_INSTR_KICK &&
+     (int)H5_VOICE_SNARE == (int)H5_INSTR_SNARE &&
+     (int)H5_VOICE_TOM_1 == (int)H5_INSTR_TOM_1 &&
+     (int)H5_VOICE_TOM_2 == (int)H5_INSTR_TOM_2 &&
+     (int)H5_VOICE_TOM_3 == (int)H5_INSTR_TOM_3 &&
+     (int)H5_VOICE_COUNT == (int)H5_INSTR_COUNT) ? 1 : -1];
+
 /* Restore parameters and mixer values to their defaults. The sample rate is
  * left untouched; the caller is responsible for resetting any rate-dependent
  * runtime state. */
@@ -84,7 +94,7 @@ void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
         return;
     }
 
-    if (ctx == 0) {
+    if (ctx == 0 || !h5_is_active(ctx)) {
         while (frames > 0u) {
             size_t chunk = (frames < H5_CLEAR_CHUNK) ? frames : H5_CLEAR_CHUNK;
             size_t values = chunk * 2u;
@@ -99,31 +109,40 @@ void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
     for (i = 0u; i < frames; i++) {
         int64_t left = 0;
         int64_t right = 0;
-        int32_t out;
+        h5_voice voice;
 
-        out = h5_voice_process(ctx, H5_VOICE_KICK);
-        if (out != 0) {
-            h5_mix_add(ctx, H5_INSTR_KICK, out, &left, &right);
-        }
-        out = h5_voice_process(ctx, H5_VOICE_SNARE);
-        if (out != 0) {
-            h5_mix_add(ctx, H5_INSTR_SNARE, out, &left, &right);
-        }
-        out = h5_voice_process(ctx, H5_VOICE_TOM_1);
-        if (out != 0) {
-            h5_mix_add(ctx, H5_INSTR_TOM_1, out, &left, &right);
-        }
-        out = h5_voice_process(ctx, H5_VOICE_TOM_2);
-        if (out != 0) {
-            h5_mix_add(ctx, H5_INSTR_TOM_2, out, &left, &right);
-        }
-        out = h5_voice_process(ctx, H5_VOICE_TOM_3);
-        if (out != 0) {
-            h5_mix_add(ctx, H5_INSTR_TOM_3, out, &left, &right);
+        /* Visit only the voices that are still sounding. Bits are cleared as
+         * their engines finish, so a silent voice is skipped entirely and a
+         * fully silent kit needs no per-frame mixing at all. The voice and
+         * instrument enums share the same order, hence the cast below. */
+        for (voice = 0; voice < H5_VOICE_COUNT; voice++) {
+            uint32_t bit = (uint32_t)1u << (unsigned)voice;
+            int32_t out;
+
+            if ((ctx->active_mask & bit) == 0u) {
+                continue;
+            }
+            out = h5_voice_process(ctx, voice);
+            if (out != 0) {
+                h5_mix_add(ctx, (h5_instrument)voice, out, &left, &right);
+            }
+            if (!h5_voice_is_active(ctx, voice)) {
+                ctx->active_mask &= ~bit;
+            }
         }
 
         stereo_out[2u * i] = h5_mix_to_q15(left);
         stereo_out[2u * i + 1u] = h5_mix_to_q15(right);
+
+        if (ctx->active_mask == 0u) {
+            size_t remaining = frames - i - 1u;
+
+            if (remaining > 0u) {
+                memset(&stereo_out[2u * (i + 1u)], 0,
+                    remaining * 2u * sizeof(int16_t));
+            }
+            return;
+        }
     }
 }
 

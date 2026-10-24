@@ -107,8 +107,21 @@ void h5_reset(h5_context ctx);
  * `stereo_out` must have room for `frames` stereo frames (2 * frames int16_t
  * values). The library is not thread-safe: h5_process() and the setters must
  * never run at the same time. h5_create_context() and h5_destroy_context()
- * must not run at the same time either. */
+ * must not run at the same time either.
+ *
+ * When no voice is sounding the output is silence. Callers that stream the
+ * output continuously can poll h5_is_active() to suspend their audio path
+ * while the kit is idle. */
 void h5_process(h5_context ctx, int16_t *stereo_out, size_t frames);
+
+/* Return true when at least one voice is producing sound or still in its
+ * release phase, false when the kit is silent. A null context reports
+ * false.
+ *
+ * The result changes only inside h5_process() or the trigger/setter calls,
+ * so it can be used to decide whether h5_process() needs to be called at
+ * all. */
+bool h5_is_active(const h5_context ctx);
 
 /* Set a sound parameter for a voice. Values are Q16.16 physical units:
  * Hz for pitch and filter frequencies, seconds for decay, signed semitones

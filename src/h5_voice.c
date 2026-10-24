@@ -21,6 +21,7 @@ void h5_voice_init_all(struct h5_context_s *ctx)
 {
     int i;
 
+    ctx->active_mask = 0u;
     h5_kick_init(&ctx->kick, ctx->sample_rate);
     h5_kick_configure(&ctx->kick, ctx->voice_params[H5_VOICE_KICK],
         ctx->sample_rate);
@@ -68,6 +69,9 @@ void h5_voice_trigger(struct h5_context_s *ctx, h5_voice voice)
     } else if (voice == H5_VOICE_SNARE) {
         h5_snare_trigger(&ctx->snare);
     }
+    if ((unsigned)voice < (unsigned)H5_VOICE_COUNT) {
+        ctx->active_mask |= (uint32_t)1u << (unsigned)voice;
+    }
 }
 
 void h5_voice_trigger_instrument(struct h5_context_s *ctx,
@@ -92,6 +96,29 @@ void h5_voice_trigger_instrument(struct h5_context_s *ctx,
     default:
         break;
     }
+}
+
+bool h5_is_active(const h5_context handle)
+{
+    const struct h5_context_s *ctx = (const struct h5_context_s *)handle;
+
+    return ctx != 0 && ctx->active_mask != 0u;
+}
+
+bool h5_voice_is_active(const struct h5_context_s *ctx, h5_voice voice)
+{
+    int tom = h5_tom_index(voice);
+
+    if (voice == H5_VOICE_KICK) {
+        return ctx->kick.active != 0u;
+    }
+    if (tom >= 0) {
+        return ctx->tom[tom].active != 0u;
+    }
+    if (voice == H5_VOICE_SNARE) {
+        return ctx->snare.active != 0u;
+    }
+    return false;
 }
 
 int32_t h5_voice_process(struct h5_context_s *ctx, h5_voice voice)

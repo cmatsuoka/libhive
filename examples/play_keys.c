@@ -12,6 +12,10 @@
  * Audio is streamed through OpenAL as a queue of short buffers. Four 256-frame
  * buffers keep the added latency around 20 ms at 48 kHz while leaving enough
  * headroom for ordinary operating-system scheduling jitter.
+ *
+ * When no voice is sounding the process blocks on the keyboard instead of
+ * rendering and streaming silence. The queued tail is left to play out
+ * naturally; the stream is restarted on the next trigger.
  */
 
 #include <AL/al.h>
@@ -146,6 +150,22 @@ static void service_source(h5_context kit, ALuint source, uint32_t sample_rate)
     }
 }
 
+/* Reset a stopped source and fill a fresh stream. Only used when the source is
+ * not playing, so there is no queued audio to lose. */
+static void start_stream(h5_context kit, ALuint source, const ALuint *buffers,
+    uint32_t sample_rate)
+{
+    unsigned int i;
+
+    alSourceStop(source);
+    alSourcei(source, AL_BUFFER, 0);
+    for (i = 0; i < BUFFER_COUNT; i++) {
+        fill_buffer(kit, buffers[i], sample_rate);
+        alSourceQueueBuffers(source, 1, &buffers[i]);
+    }
+    alSourcePlay(source);
+}
+
 int main(void)
 {
     ALCdevice *device = 0;
@@ -156,10 +176,9 @@ int main(void)
     uint32_t sample_rate = H5_DEFAULT_SAMPLE_RATE;
     int quit = 0;
     int status = EXIT_FAILURE;
-    unsigned int i;
 
     printf("Hive-V keyboard drums\n");
-    printf("  S kick   D snare   O tom 1   I tom 2   P tom 3\n");
+    printf("  S kick   D snare   O tom 1   I tom 2   U tom 3\n");
     printf("  Q or Esc to quit\n\n");
     fflush(stdout);
 
@@ -210,25 +229,22 @@ int main(void)
         goto cleanup;
     }
 
-    for (i = 0; i < BUFFER_COUNT; i++) {
-        fill_buffer(kit, buffers[i], sample_rate);
-        alSourceQueueBuffers(source, 1, &buffers[i]);
-    }
-    alSourcePlay(source);
-
-    printf("Playing at %u Hz (about %u ms of queued audio).\n",
+    printf("Sample rate: %u Hz (about %u ms of queued audio).\n",
         (unsigned)sample_rate,
         (unsigned)((BUFFER_FRAMES * BUFFER_COUNT * 1000u) / sample_rate));
     fflush(stdout);
 
     while (!quit) {
         struct pollfd pfd;
+        int active = h5_is_active(kit);
         int ready;
 
         pfd.fd = STDIN_FILENO;
         pfd.events = POLLIN;
         pfd.revents = 0;
-        ready = poll(&pfd, 1, POLL_TIMEOUT_MS);
+        /* While idle, block on the keyboard instead of waking every couple of
+         * milliseconds to feed silence to the audio device. */
+        ready = poll(&pfd, 1, active ? POLL_TIMEOUT_MS : -1);
 
         if (ready > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR))) {
             unsigned char keys[64];
@@ -247,11 +263,20 @@ int main(void)
             }
         }
 
-        service_source(kit, source, sample_rate);
-
-        {
+        if (!active && h5_is_active(kit)) {
             ALint state = 0;
 
+            alGetSourcei(source, AL_SOURCE_STATE, &state);
+            if (state == AL_PLAYING || state == AL_PAUSED) {
+                service_source(kit, source, sample_rate);
+                alSourcePlay(source);
+            } else {
+                start_stream(kit, source, buffers, sample_rate);
+            }
+        } else if (active) {
+            ALint state = 0;
+
+            service_source(kit, source, sample_rate);
             alGetSourcei(source, AL_SOURCE_STATE, &state);
             if (state != AL_PLAYING) {
                 alSourcePlay(source);
