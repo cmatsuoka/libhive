@@ -12,6 +12,17 @@
 #include "h5_fixed.h"
 #include <stdint.h>
 
+/* The render loop maps each active voice bit to its instrument index by a
+ * cast, and the voice dispatch maps an instrument to its voice the same
+ * way, so the two public enums must keep the same order and size. */
+typedef char h5_voice_instrument_order_check[
+    ((int)H5_VOICE_KICK == (int)H5_INSTR_KICK &&
+     (int)H5_VOICE_SNARE == (int)H5_INSTR_SNARE &&
+     (int)H5_VOICE_TOM_1 == (int)H5_INSTR_TOM_1 &&
+     (int)H5_VOICE_TOM_2 == (int)H5_INSTR_TOM_2 &&
+     (int)H5_VOICE_TOM_3 == (int)H5_INSTR_TOM_3 &&
+     (int)H5_VOICE_COUNT == (int)H5_INSTR_COUNT) ? 1 : -1];
+
 /* Full sine period, one entry per sample of a 1024-step cycle. The oscillator
  * and the filter coefficient setup interpolate between entries, so this is
  * the stored resolution only, not the output resolution. */
@@ -231,11 +242,28 @@ struct h5_pitch_curve_s {
     int32_t inc[H5_PITCH_POINTS + 1];
 };
 
+/* The fixed 50 Hz high-pass / 20 kHz low-pass band limit on the held noise.
+ * One instance per engine. */
+struct h5_pf_s {
+    int32_t k50;   /* one-pole coefficient, Q30 */
+    int32_t k20;
+    int32_t l50;   /* low-pass state, Q31 */
+    int32_t l20;
+};
+
+/* The fields every engine state starts with. The activity flag sits at a
+ * fixed offset, so the dispatch layer can read it without a per-engine
+ * accessor. */
+struct h5_engine_s {
+    uint8_t active;   /* the engine still has output to render */
+};
+
 /* Kick voice runtime state. The engine keeps its own copies of the parameters
  * it needs per sample so the audio path never reads the parameter matrix.
  * Engine outputs are Q30 (1.0 = 1 << 30) with one headroom bit for the
  * shaper stage's overshoot; the mixer converts. */
 struct h5_kick_s {
+    struct h5_engine_s head;
     struct h5_env_s env_noise;  /* noise AR: ~2 ms attack, Decay release */
     struct h5_env_s env_tone;   /* tone AR: 0.005*Decay attack, Decay release */
     struct h5_env_s env_click;  /* burst AR^10: 1 ms, 0.2*Decay+0.1 release */
@@ -244,6 +272,7 @@ struct h5_kick_s {
     struct h5_sweep_s noise_sweep;
     struct h5_svf_s out_filter;
     struct h5_pitch_curve_s pitch_curve;
+    struct h5_pf_s pf;
     uint32_t phase;          /* 28-bit tone oscillator phase */
     int32_t base_inc;        /* phase28 increment at TonePitch, no bend */
     int32_t bend_q16;        /* pitch sweep depth in 12ths of an octave */
@@ -251,13 +280,8 @@ struct h5_kick_s {
     int32_t tone_gain_q16;   /* 0.9 * NoiseTone^0.7 * (1-Click)^0.7 */
     int32_t noise_gain_q16;  /* 0.3 * (1-NoiseTone)^0.7 * (1-Click)^0.7 */
     int32_t click_gain_q16;  /* 0.9 * Click^0.7 */
-    int32_t pf_k50;          /* pre-filter 50 Hz one-pole k, Q30 */
-    int32_t pf_k20;          /* pre-filter 20 kHz one-pole k, Q30 */
-    int32_t pf_l50;          /* pre-filter 50 Hz low-pass state */
-    int32_t pf_l20;          /* pre-filter 20 kHz low-pass state */
     int32_t pf_k338;         /* transient darkening low-pass k, Q30 */
     int32_t pf_l338;         /* transient darkening low-pass state */
-    uint8_t active;
 };
 
 /* Number of Tom engine instances. H5_VOICE_TOM_1..H5_VOICE_TOM_3 are
@@ -269,6 +293,7 @@ struct h5_kick_s {
  * Tom instance has its own envelopes, filters, oscillator and noise state,
  * and its own filter-bend depth (the three tunings differ per instance). */
 struct h5_tom_s {
+    struct h5_engine_s head;
     struct h5_env_s env;       /* body AR: 0.005*Decay attack, Decay release */
     struct h5_env_s env_click; /* burst AR^10: 1 ms attack, 0.25*Decay */
     struct h5_noise_s noise;
@@ -276,24 +301,21 @@ struct h5_tom_s {
     struct h5_sweep_s noise_sweep;
     struct h5_svf_s out_filter;
     struct h5_pitch_curve_s pitch_curve;
+    struct h5_pf_s pf;
     uint32_t phase;        /* 28-bit tone oscillator phase */
     int32_t base_inc;      /* phase28 increment at TonePitch, no bend */
     int32_t bend_q16;        /* pitch sweep depth in 12ths of an octave */
     int32_t noise_pitch_q16; /* noise filter base cutoff, Hz Q16 */
     int32_t filter_bend_q16; /* per-instance noise-cutoff bend depth */
-    int32_t pf_k50;          /* pre-filter 50 Hz one-pole k, Q30 */
-    int32_t pf_k20;          /* pre-filter 20 kHz one-pole k, Q30 */
-    int32_t pf_l50;          /* pre-filter 50 Hz low-pass state */
-    int32_t pf_l20;          /* pre-filter 20 kHz low-pass state */
     int32_t tone_gain_q16;   /* NoiseTone^0.7 */
     int32_t noise_gain_q16;  /* 0.3 * (1 - NoiseTone)^0.7 */
     int32_t body_gain_q16;   /* (1 - Click)^0.7 */
     int32_t click_gain_q16;  /* Click^0.7 * click scale */
-    uint8_t active;
 };
 
 /* Snare voice runtime state. */
 struct h5_snare_s {
+    struct h5_engine_s head;
     struct h5_env_s env;       /* body AR: 1 ms attack, Decay release */
     struct h5_env_s env_click; /* transient AR^10: 1 ms attack,
                                 * 0.2*Decay+0.1 s release */
@@ -302,20 +324,16 @@ struct h5_snare_s {
     struct h5_svf_s out_filter; /* output low-pass; base cutoff NoisePitch */
     struct h5_sweep_s out_sweep; /* swept coefficients for out_filter */
     struct h5_pitch_curve_s pitch_curve;
+    struct h5_pf_s pf;
     uint32_t phase;            /* 28-bit tone oscillator phase */
     int32_t base_inc;          /* phase28 increment at TonePitch, no bend */
     int32_t bend_q16;          /* pitch sweep depth in 12ths of an octave */
     int32_t noise_pitch_q16;   /* output low-pass base cutoff */
-    int32_t pf_k50;            /* pre-filter 50 Hz one-pole k, Q30 */
-    int32_t pf_k20;            /* pre-filter 20 kHz one-pole k, Q30 */
-    int32_t pf_l50;            /* pre-filter 50 Hz low-pass state */
-    int32_t pf_l20;            /* pre-filter 20 kHz low-pass state */
     int32_t tone_gain_q16;     /* NoiseTone^0.7 */
     int32_t noise_gain_q16;    /* 0.3 * (1 - NoiseTone)^0.7 */
     int32_t body_gain_q16;     /* (1 - Click)^0.7 */
     int32_t click_gain_q16;    /* Click^0.7 */
     int32_t sweep_q16;         /* filter-envelope contour depth */
-    uint8_t active;
 };
 
 /* The concrete context behind the opaque h5_context handle. */
@@ -337,39 +355,65 @@ struct h5_context_s {
      * Bits are cleared as their engines finish during rendering. */
     uint32_t active_mask;
 
-    /* Voice runtime state, initialized by h5_voice_init_all(). The Toms are
+    /* Voice runtime state, initialized by h5_voice_setup_all(). The Toms are
      * three independent instances of the same engine. */
     struct h5_kick_s kick;
     struct h5_tom_s tom[H5_TOM_COUNT];
     struct h5_snare_s snare;
 };
 
-/* Kick engine. */
-void h5_kick_init(struct h5_kick_s *k, uint32_t sample_rate);
-void h5_kick_configure(struct h5_kick_s *k,
-    const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
-void h5_kick_trigger(struct h5_kick_s *k);
-int32_t h5_kick_process(struct h5_kick_s *k);
+/* The engine operations. One set per engine type; the three Toms share the
+ * Tom set. The engine pointer addresses the concrete engine state that
+ * belongs to the set, so a set and a state must always be paired.
+ *
+ * setup resets the engine state and then applies the parameters; configure
+ * applies the parameters alone, so that a parameter change does not cut a
+ * sounding voice. */
+struct h5_engine_ops {
+    void (*setup)(void *engine, h5_voice voice,
+        const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
+    void (*configure)(void *engine,
+        const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
+    void (*trigger)(void *engine);
+    int32_t (*process)(void *engine);
+};
 
-/* Tom engine. Times and controls are taken from the context's parameter
- * matrix; the noise generator is seeded per Tom instance and free-runs across
- * triggers so successive hits are not identical. */
-void h5_tom_init(struct h5_tom_s *t, h5_voice voice, uint32_t sample_rate);
-void h5_tom_configure(struct h5_tom_s *t,
-    const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
-void h5_tom_trigger(struct h5_tom_s *t);
-int32_t h5_tom_process(struct h5_tom_s *t);
+extern const struct h5_engine_ops h5_kick_ops;
+extern const struct h5_engine_ops h5_snare_ops;
+extern const struct h5_engine_ops h5_tom_ops;
 
-/* Snare engine. */
-void h5_snare_init(struct h5_snare_s *s, uint32_t sample_rate);
-void h5_snare_configure(struct h5_snare_s *s,
+/* One voice's binding to an engine instance: the operation set it runs and
+ * where its engine state sits inside the context. */
+struct h5_voice_slot {
+    const struct h5_engine_ops *ops;
+    size_t offset;   /* byte offset of the engine state in the context */
+};
+
+extern const struct h5_voice_slot h5_voice_slots[H5_VOICE_COUNT];
+
+/* Kick engine. The engine pointer addresses a struct h5_kick_s. */
+void h5_kick_setup(void *engine, h5_voice voice,
     const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
-void h5_snare_trigger(struct h5_snare_s *s);
-int32_t h5_snare_process(struct h5_snare_s *s);
+void h5_kick_trigger(void *engine);
+int32_t h5_kick_process(void *engine);
+
+/* Tom engine. The engine pointer addresses a struct h5_tom_s. Times and
+ * controls are taken from the context's parameter matrix; the noise
+ * generator is seeded per Tom instance and free-runs across triggers so
+ * successive hits are not identical. */
+void h5_tom_setup(void *engine, h5_voice voice,
+    const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
+void h5_tom_trigger(void *engine);
+int32_t h5_tom_process(void *engine);
+
+/* Snare engine. The engine pointer addresses a struct h5_snare_s. */
+void h5_snare_setup(void *engine, h5_voice voice,
+    const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate);
+void h5_snare_trigger(void *engine);
+int32_t h5_snare_process(void *engine);
 
 /* Voice helpers used by the lifecycle, parameter and render entry points. */
-void h5_voice_init_all(struct h5_context_s *ctx);
-void h5_voice_reset_all(struct h5_context_s *ctx);
+void h5_voice_setup_all(struct h5_context_s *ctx);
 void h5_voice_configure(struct h5_context_s *ctx, h5_voice voice);
 void h5_voice_trigger(struct h5_context_s *ctx, h5_voice voice);
 
@@ -377,10 +421,25 @@ void h5_voice_trigger(struct h5_context_s *ctx, h5_voice voice);
 void h5_voice_trigger_instrument(struct h5_context_s *ctx,
     h5_instrument instrument);
 
-int32_t h5_voice_process(struct h5_context_s *ctx, h5_voice voice);
+/* The engine state of one voice. The voice must be in range. */
+static inline void *h5_voice_engine(struct h5_context_s *ctx, h5_voice voice)
+{
+    return (void *)((char *)ctx + h5_voice_slots[voice].offset);
+}
 
-/* True while the named voice's engine still has output to render. */
-bool h5_voice_is_active(const struct h5_context_s *ctx, h5_voice voice);
+/* Render one voice. The activity flag reports whether the engine still has
+ * output to render, so the caller does not need a second dispatch. */
+static inline int32_t h5_voice_process(struct h5_context_s *ctx, h5_voice voice,
+    bool *active)
+{
+    void *engine = h5_voice_engine(ctx, voice);
+    int32_t out = h5_voice_slots[voice].ops->process(engine);
+
+    /* Every engine state starts with the activity flag, so the caller learns
+     * whether the voice is still sounding straight after the render. */
+    *active = ((const struct h5_engine_s *)engine)->active != 0u;
+    return out;
+}
 
 /* Add one instrument's mono Q30 output to the 64-bit stereo accumulators,
  * applying its mixer volume and pan. */

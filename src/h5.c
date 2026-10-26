@@ -11,18 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define H5_CLEAR_CHUNK 4096u
-
-/* The render loop maps each active voice bit to its instrument index by a
- * cast, so the two public enums must keep the same order and size. */
-typedef char h5_voice_instrument_order_check[
-    ((int)H5_VOICE_KICK == (int)H5_INSTR_KICK &&
-     (int)H5_VOICE_SNARE == (int)H5_INSTR_SNARE &&
-     (int)H5_VOICE_TOM_1 == (int)H5_INSTR_TOM_1 &&
-     (int)H5_VOICE_TOM_2 == (int)H5_INSTR_TOM_2 &&
-     (int)H5_VOICE_TOM_3 == (int)H5_INSTR_TOM_3 &&
-     (int)H5_VOICE_COUNT == (int)H5_INSTR_COUNT) ? 1 : -1];
-
 /* Restore parameters and mixer values to their defaults. The sample rate is
  * left untouched; the caller is responsible for resetting any rate-dependent
  * runtime state. */
@@ -52,7 +40,7 @@ h5_context h5_create_context(uint32_t sample_rate)
     ctx->sample_rate = (sample_rate == 0u) ? H5_DEFAULT_SAMPLE_RATE
         : sample_rate;
     h5_init_defaults(ctx);
-    h5_voice_init_all(ctx);
+    h5_voice_setup_all(ctx);
     return (h5_context)ctx;
 }
 
@@ -70,7 +58,7 @@ void h5_set_sample_rate(h5_context handle, uint32_t sample_rate)
     }
     ctx->sample_rate = (sample_rate == 0u) ? H5_DEFAULT_SAMPLE_RATE
         : sample_rate;
-    h5_voice_init_all(ctx);
+    h5_voice_setup_all(ctx);
 }
 
 void h5_reset(h5_context handle)
@@ -81,7 +69,7 @@ void h5_reset(h5_context handle)
         return;
     }
     h5_init_defaults(ctx);
-    h5_voice_reset_all(ctx);
+    h5_voice_setup_all(ctx);
 }
 
 void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
@@ -94,14 +82,7 @@ void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
     }
 
     if (ctx == 0 || !h5_is_active(ctx)) {
-        while (frames > 0u) {
-            size_t chunk = (frames < H5_CLEAR_CHUNK) ? frames : H5_CLEAR_CHUNK;
-            size_t values = chunk * 2u;
-
-            memset(stereo_out, 0, values * sizeof(int16_t));
-            stereo_out += values;
-            frames -= chunk;
-        }
+        memset(stereo_out, 0, frames * 2u * sizeof(int16_t));
         return;
     }
 
@@ -117,15 +98,16 @@ void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
         for (voice = 0; voice < H5_VOICE_COUNT; voice++) {
             uint32_t bit = (uint32_t)1u << (unsigned)voice;
             int32_t out;
+            bool still_active;
 
             if ((ctx->active_mask & bit) == 0u) {
                 continue;
             }
-            out = h5_voice_process(ctx, voice);
+            out = h5_voice_process(ctx, voice, &still_active);
             if (out != 0) {
                 h5_mix_add(ctx, (h5_instrument)voice, out, &left, &right);
             }
-            if (!h5_voice_is_active(ctx, voice)) {
+            if (!still_active) {
                 ctx->active_mask &= ~bit;
             }
         }

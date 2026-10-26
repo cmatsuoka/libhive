@@ -33,6 +33,11 @@
  * Drive, Resonance and Gain are engine constants (0.13, 1.0, 1.0), not
  * exposed parameters. Each trigger restarts the oscillator phase, the
  * envelopes and the filters; the noise generator free-runs.
+ *
+ * The three engines share the parts of the per-sample chain that are
+ * identical: the oscillator, the shaped sine, the transient burst, the body
+ * mix and the output stage live in the shared helpers below. What stays
+ * engine-specific is the branch structure each voice actually uses.
  */
 
 #include "h5_internal.h"
@@ -138,30 +143,27 @@ static int32_t h5_pf_k(int32_t f_q16, uint32_t sample_rate)
     return (int32_t)q;
 }
 
-/* The fixed 50 Hz high-pass / 20 kHz low-pass band limit on the held noise. */
-static int32_t h5_prefilter(int32_t *l50, int32_t *l20, int32_t k50,
-    int32_t k20, int32_t x)
+/* The fixed 50 Hz high-pass / 20 kHz low-pass band limit on the held noise.
+ * The states live in the filter, so the band limit is stateful. */
+static int32_t h5_pf_run(struct h5_pf_s *pf, int32_t x)
 {
     int32_t hp, lp;
 
-    lp = h5_sat_add_q31(*l50, h5_mul_q30(h5_sat_sub_q31(x, *l50), k50));
-    *l50 = lp;
+    lp = h5_sat_add_q31(pf->l50, h5_mul_q30(h5_sat_sub_q31(x, pf->l50),
+        pf->k50));
+    pf->l50 = lp;
     hp = h5_sat_sub_q31(x, lp);
-    lp = h5_sat_add_q31(*l20, h5_mul_q30(h5_sat_sub_q31(hp, *l20), k20));
-    *l20 = lp;
+    lp = h5_sat_add_q31(pf->l20, h5_mul_q30(h5_sat_sub_q31(hp, pf->l20),
+        pf->k20));
+    pf->l20 = lp;
     return lp;
 }
 
-/* Common fixed one-pole setup for one sample rate. k338 is filled only
- * for voices that tone down their transient burst (pass NULL elsewhere). */
-static void h5_pf_setup(int32_t *k50, int32_t *k20, int32_t *k338,
-    uint32_t sample_rate)
+/* Common fixed one-pole setup for one sample rate. */
+static void h5_pf_setup(struct h5_pf_s *pf, uint32_t sample_rate)
 {
-    *k50 = h5_pf_k(H5_PF_LO_HZ, sample_rate);
-    *k20 = h5_pf_k(H5_PF_HI_HZ, sample_rate);
-    if (k338) {
-        *k338 = h5_pf_k(H5_PF_338_HZ, sample_rate);
-    }
+    pf->k50 = h5_pf_k(H5_PF_LO_HZ, sample_rate);
+    pf->k20 = h5_pf_k(H5_PF_HI_HZ, sample_rate);
 }
 
 /* x^10 in Q30: (v^8 * v^2), three squarings. */
@@ -248,6 +250,88 @@ static int32_t h5_pitch_lookup(const struct h5_pitch_curve_s *curve,
         H5_PITCH_SHIFT);
 }
 
+/* The shared pitch setup: the oscillator increment at TonePitch and the
+ * precomputed increment curve. All three engines use it unchanged. */
+static void h5_setup_pitch(struct h5_pitch_curve_s *curve, int32_t *base_inc,
+    const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate)
+{
+    /* cycles/sample = pitch/rate; the 28-bit phase unit adds 2^28. pitch is
+     * Q16 Hz, so the numerator is pitch << 12. */
+    int64_t inc = ((int64_t)params[H5_PARAM_TONE_PITCH] << 12) / sample_rate;
+
+    if (inc < 1) {
+        inc = 1;
+    }
+    *base_inc = (int32_t)inc;
+    h5_pitch_build(curve, *base_inc, params[H5_PARAM_BEND]);
+}
+
+/* The tone oscillator: advance the phase by the increment the pitch curve
+ * gives for the current envelope, then read the sine and its quarter-phase
+ * partner. */
+static void h5_tone_osc(uint32_t *phase, const struct h5_pitch_curve_s *curve,
+    int32_t env3, int32_t *s, int32_t *s2)
+{
+    int32_t inc = h5_pitch_lookup(curve, env3);
+
+    *phase = (*phase + (uint32_t)inc) & 0x0FFFFFFFu;
+    *s = h5_sine_interp(*phase);
+    *s2 = h5_sine_interp((uint32_t)(*s >> 5));
+}
+
+/* The mean of the sine and its quarter-phase partner: the core of the
+ * shaped-sine branch. */
+static int32_t h5_sine_mean(int32_t s, int32_t s2)
+{
+    return (int32_t)(((int64_t)s2 + (int64_t)s) / 2);
+}
+
+/* The shaped-sine branch under the body envelope. */
+static int32_t h5_shaped_sine(int32_t s, int32_t s2, int32_t env3)
+{
+    return h5_mul_q30(h5_sine_mean(s, s2), env3);
+}
+
+/* The transient burst: the source scaled by the click gain and by the tenth
+ * power of the burst envelope. */
+static int32_t h5_burst(int32_t src, int32_t gain_q16, int32_t env_c)
+{
+    int32_t burst = h5_mul_q16(src, gain_q16);
+
+    return h5_mul_q30(burst, h5_pow10_q30(env_c));
+}
+
+/* The body mix: the tone under its gain plus the noise under its gain, both
+ * under the cubed body envelope and the body gain. */
+static int32_t h5_body_mix(int32_t s, int32_t noise_src, int32_t env3,
+    int32_t tone_gain_q16, int32_t noise_gain_q16, int32_t body_gain_q16)
+{
+    int32_t tone = h5_mul_q16(s, tone_gain_q16);
+    int32_t sum = h5_sat_add_q31(tone, h5_mul_q16(noise_src, noise_gain_q16));
+
+    sum = h5_mul_q30(sum, env3);
+    return h5_mul_q16(sum, body_gain_q16);
+}
+
+/* The output stage: the soft-clip shaper, the fixed output gain and the
+ * output filter. */
+static int32_t h5_output_stage(int32_t mix, struct h5_svf_s *out_filter)
+{
+    int32_t out = h5_softclip_q31(mix);
+
+    out = h5_mul_q16(out, H5_OUT_GAIN_Q16);
+    return h5_svf_run(out_filter, out);
+}
+
+/* The noise path the Kick and the Tom share: the band-limited held noise
+ * through the swept low-pass. */
+static int32_t h5_noise_band(struct h5_pf_s *pf, struct h5_noise_s *noise,
+    struct h5_svf_s *filter, struct h5_sweep_s *sweep, int32_t cutoff_q16)
+{
+    h5_sweep_apply(sweep, cutoff_q16, filter);
+    return h5_svf_run(filter, h5_pf_run(pf, h5_noise_next(noise)));
+}
+
 /* Per-band rattle weights (with the folded output scale), Q16. */
 static const int32_t h5_snare_rattle_weight[4] = {
     H5_SNARE_RATTLE_WEIGHT_1, H5_SNARE_RATTLE_WEIGHT_2,
@@ -273,34 +357,12 @@ static const int32_t h5_snare_rattle_weight[4] = {
  *   (the single Decay control sets both the tone and noise envelopes)
  */
 
-void h5_kick_init(struct h5_kick_s *k, uint32_t sample_rate)
-{
-    h5_env_init(&k->env_noise);
-    h5_env_init(&k->env_tone);
-    h5_env_init(&k->env_click);
-    h5_noise_init_voice(&k->noise, H5_VOICE_KICK, sample_rate);
-    h5_svf_reset(&k->noise_filter);
-    h5_svf_reset(&k->out_filter);
-    k->phase = 0u;
-    k->base_inc = 0;
-    k->bend_q16 = 0;
-    k->noise_pitch_q16 = 0;
-    k->tone_gain_q16 = 0;
-    k->noise_gain_q16 = 0;
-    k->click_gain_q16 = 0;
-    k->pf_k50 = 0;
-    k->pf_k20 = 0;
-    k->pf_l50 = 0;
-    k->pf_l20 = 0;
-    k->pf_k338 = 0;
-    k->pf_l338 = 0;
-    k->active = 0u;
-}
-
-void h5_kick_configure(struct h5_kick_s *k,
+/* Apply the parameters to the Kick engine. A parameter change goes through
+ * here; the engine state is left alone so a sounding voice is not cut. */
+static void h5_kick_apply(void *engine,
     const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate)
 {
-    int64_t inc;
+    struct h5_kick_s *k = (struct h5_kick_s *)engine;
     int32_t click, decay, noise_attack;
 
     if (sample_rate == 0u) {
@@ -324,14 +386,7 @@ void h5_kick_configure(struct h5_kick_s *k,
     k->click_gain_q16 = h5_mul_q16(H5_KICK_CLICK_WEIGHT_Q16,
         h5_pow07_q16(click));
 
-    /* cycles/sample = pitch/rate; the 28-bit phase unit adds 2^28. pitch is
-     * Q16 Hz, so the numerator is pitch << 12. */
-    inc = ((int64_t)params[H5_PARAM_TONE_PITCH] << 12) / sample_rate;
-    if (inc < 1) {
-        inc = 1;
-    }
-    k->base_inc = (int32_t)inc;
-    h5_pitch_build(&k->pitch_curve, k->base_inc, k->bend_q16);
+    h5_setup_pitch(&k->pitch_curve, &k->base_inc, params, sample_rate);
 
     /* Envelopes. The tone env drives both amplitude and pitch and starts
      * fast; the noise env shares the tone release; the click burst keeps
@@ -341,7 +396,8 @@ void h5_kick_configure(struct h5_kick_s *k,
     h5_env_set_times(&k->env_noise, H5_MS_Q16(2), decay, sample_rate);
     h5_env_set_times(&k->env_click, H5_MS_Q16(1), noise_attack, sample_rate);
 
-    h5_pf_setup(&k->pf_k50, &k->pf_k20, &k->pf_k338, sample_rate);
+    h5_pf_setup(&k->pf, sample_rate);
+    k->pf_k338 = h5_pf_k(H5_PF_338_HZ, sample_rate);
     h5_svf_tune(&k->out_filter, H5_SVF_HP,
         H5_KICK_OUT_HP_HZ * H5_Q16_ONE, H5_KICK_OUT_Q16, sample_rate);
     h5_sweep_build(&k->noise_sweep, H5_SVF_LP, H5_KICK_RESONANCE_Q16,
@@ -351,27 +407,66 @@ void h5_kick_configure(struct h5_kick_s *k,
         sample_rate);
 }
 
-void h5_kick_trigger(struct h5_kick_s *k)
+void h5_kick_setup(void *engine, h5_voice voice,
+    const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate)
 {
+    struct h5_kick_s *k = (struct h5_kick_s *)engine;
+
+    (void)voice;
+
+    if (sample_rate == 0u) {
+        sample_rate = H5_DEFAULT_SAMPLE_RATE;
+    }
+
+    /* Initial state. */
+    h5_env_init(&k->env_noise);
+    h5_env_init(&k->env_tone);
+    h5_env_init(&k->env_click);
+    h5_noise_init_voice(&k->noise, H5_VOICE_KICK, sample_rate);
+    h5_svf_reset(&k->noise_filter);
+    h5_svf_reset(&k->out_filter);
+    k->phase = 0u;
+    k->base_inc = 0;
+    k->bend_q16 = 0;
+    k->noise_pitch_q16 = 0;
+    k->tone_gain_q16 = 0;
+    k->noise_gain_q16 = 0;
+    k->click_gain_q16 = 0;
+    k->pf.k50 = 0;
+    k->pf.k20 = 0;
+    k->pf.l50 = 0;
+    k->pf.l20 = 0;
+    k->pf_k338 = 0;
+    k->pf_l338 = 0;
+    k->head.active = 0u;
+
+    h5_kick_apply(engine, params, sample_rate);
+}
+
+void h5_kick_trigger(void *engine)
+{
+    struct h5_kick_s *k = (struct h5_kick_s *)engine;
+
     k->phase = 0u;
     h5_env_trigger(&k->env_noise);
     h5_env_trigger(&k->env_tone);
     h5_env_trigger(&k->env_click);
     h5_svf_reset(&k->noise_filter);
     h5_svf_reset(&k->out_filter);
-    k->pf_l50 = 0;
-    k->pf_l20 = 0;
+    k->pf.l50 = 0;
+    k->pf.l20 = 0;
     k->pf_l338 = 0;
-    k->active = 1u;
+    k->head.active = 1u;
 }
 
-int32_t h5_kick_process(struct h5_kick_s *k)
+int32_t h5_kick_process(void *engine)
 {
+    struct h5_kick_s *k = (struct h5_kick_s *)engine;
     int32_t env_n, env_t, env_c, tone3, env3;
-    int32_t inc, s, s2, cutoff, u, nf, noise, trans, tone, sum;
-    int32_t blend, out;
+    int32_t s, s2, cutoff, nf, noise, trans, tone, sum;
+    int32_t blend;
 
-    if (!k->active) {
+    if (!k->head.active) {
         return 0;
     }
 
@@ -382,7 +477,7 @@ int32_t h5_kick_process(struct h5_kick_s *k)
         && k->env_noise.state == H5_ENV_DONE
         && k->env_tone.state == H5_ENV_DONE
         && k->env_click.state == H5_ENV_DONE) {
-        k->active = 0u;
+        k->head.active = 0u;
         return 0;
     }
 
@@ -391,21 +486,15 @@ int32_t h5_kick_process(struct h5_kick_s *k)
     tone3 = h5_cube_q30(env_t);
 
     /* Pitch: f = TonePitch * 1.5^(Bend * tone3 / 12). */
-    inc = h5_pitch_lookup(&k->pitch_curve, tone3);
-    k->phase = (k->phase + (uint32_t)inc) & 0x0FFFFFFFu;
-
-    s = h5_sine_interp(k->phase);
-    s2 = h5_sine_interp((uint32_t)(s >> 5));
+    h5_tone_osc(&k->phase, &k->pitch_curve, tone3, &s, &s2);
 
     /* Noise band limit then swept low-pass:
      * fc_n = (NoisePitch + 2000*env_n^3) * (1 - 0.5*(1 - env_n^3)). */
     env3 = h5_cube_q30(env_n);
     cutoff = h5_sweep_cutoff(k->noise_pitch_q16, H5_KICK_FILTER_BEND_Q16,
         env3 >> 14);
-    h5_sweep_apply(&k->noise_sweep, cutoff, &k->noise_filter);
-    u = h5_prefilter(&k->pf_l50, &k->pf_l20, k->pf_k50, k->pf_k20,
-        h5_noise_next(&k->noise));
-    nf = h5_svf_run(&k->noise_filter, u);
+    nf = h5_noise_band(&k->pf, &k->noise, &k->noise_filter, &k->noise_sweep,
+        cutoff);
 
     /* Sustained noise: nf * env_n * 0.3*(1-NoiseTone)^0.7*(1-Click)^0.7. */
     noise = h5_mul_q30(nf, env_n);
@@ -420,28 +509,23 @@ int32_t h5_kick_process(struct h5_kick_s *k)
         nf = h5_sat_add_q31(k->pf_l338, h5_mul_q30(h5_sat_sub_q31(nf,
             k->pf_l338), k->pf_k338));
         k->pf_l338 = nf;
-        trans = h5_mul_q16(nf, k->click_gain_q16);
-        trans = h5_mul_q30(trans, h5_pow10_q30(env_c));
+        trans = h5_burst(nf, k->click_gain_q16, env_c);
     }
 
     /* Tone: env^3 * 0.9*NoiseTone^0.7*(1-Click)^0.7
      *       * ((1-Drive)*s + Drive*4.7*0.5*(s2+s)). */
     blend = h5_sat_add_q31(
         h5_mul_q16(s, H5_Q16_ONE - H5_KICK_DRIVE_Q16),
-        h5_mul_q16((int32_t)(((int64_t)s2 + (int64_t)s) / 2),
+        h5_mul_q16(h5_sine_mean(s, s2),
             h5_mul_q16(H5_KICK_DRIVE_Q16, H5_KICK_SHAPER_WEIGHT_Q16)));
     tone = h5_mul_q30(blend, tone3);
     tone = h5_mul_q16(tone, k->tone_gain_q16);
 
     sum = h5_sat_add_q31(tone, noise);
     sum = h5_sat_add_q31(sum, trans);
-    out = h5_softclip_q31(sum);
 
     /* Fixed output gain 1.10479 into the 15 Hz high-pass. */
-    out = h5_mul_q16(out, H5_OUT_GAIN_Q16);
-    out = h5_svf_run(&k->out_filter, out);
-    /* User volume is applied once, by the mixer. */
-    return out;
+    return h5_output_stage(sum, &k->out_filter);
 }
 
 /*
@@ -461,38 +545,11 @@ int32_t h5_kick_process(struct h5_kick_s *k)
  *   (each Tom instance tunes its own filter-bend depth)
  */
 
-void h5_tom_init(struct h5_tom_s *t, h5_voice voice, uint32_t sample_rate)
-{
-    h5_env_init(&t->env);
-    h5_env_init(&t->env_click);
-    h5_noise_init_voice(&t->noise, voice, sample_rate);
-    h5_svf_reset(&t->noise_filter);
-    h5_svf_reset(&t->out_filter);
-    t->phase = 0u;
-    t->base_inc = 0;
-    t->bend_q16 = 0;
-    t->noise_pitch_q16 = 0;
-    t->filter_bend_q16 = H5_TOM_FILTER_BEND_1_Q16;
-    t->tone_gain_q16 = 0;
-    t->noise_gain_q16 = 0;
-    t->body_gain_q16 = 0;
-    t->click_gain_q16 = 0;
-    t->pf_k50 = 0;
-    t->pf_k20 = 0;
-    t->pf_l50 = 0;
-    t->pf_l20 = 0;
-    t->active = 0u;
-    if (voice == H5_VOICE_TOM_2) {
-        t->filter_bend_q16 = H5_TOM_FILTER_BEND_2_Q16;
-    } else if (voice == H5_VOICE_TOM_3) {
-        t->filter_bend_q16 = H5_TOM_FILTER_BEND_3_Q16;
-    }
-}
-
-void h5_tom_configure(struct h5_tom_s *t,
+/* Apply the parameters to the Tom engine. */
+static void h5_tom_apply(void *engine,
     const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate)
 {
-    int64_t inc;
+    struct h5_tom_s *t = (struct h5_tom_s *)engine;
     int32_t noise_tone, click, decay;
 
     if (sample_rate == 0u) {
@@ -513,19 +570,14 @@ void h5_tom_configure(struct h5_tom_s *t,
     t->click_gain_q16 = h5_mul_q16(h5_pow07_q16(click),
         H5_TOM_CLICK_GAIN_Q16);
 
-    inc = ((int64_t)params[H5_PARAM_TONE_PITCH] << 12) / sample_rate;
-    if (inc < 1) {
-        inc = 1;
-    }
-    t->base_inc = (int32_t)inc;
-    h5_pitch_build(&t->pitch_curve, t->base_inc, t->bend_q16);
+    h5_setup_pitch(&t->pitch_curve, &t->base_inc, params, sample_rate);
 
     /* Body envelope: AR^3 with a 0.005*Decay attack and the Decay release.
      * Transient envelope: AR^10, 1 ms attack, 0.25*Decay release. */
     h5_env_set_times(&t->env, decay / 200, decay, sample_rate);
     h5_env_set_times(&t->env_click, H5_MS_Q16(1), decay / 4, sample_rate);
 
-    h5_pf_setup(&t->pf_k50, &t->pf_k20, 0, sample_rate);
+    h5_pf_setup(&t->pf, sample_rate);
     h5_svf_tune(&t->out_filter, H5_SVF_HP,
         H5_TOM_OUT_HP_HZ * H5_Q16_ONE, H5_TOM_OUT_Q16, sample_rate);
     h5_sweep_build(&t->noise_sweep, H5_SVF_LP, H5_TOM_RESONANCE_Q16,
@@ -534,25 +586,65 @@ void h5_tom_configure(struct h5_tom_s *t,
         sample_rate);
 }
 
-void h5_tom_trigger(struct h5_tom_s *t)
+void h5_tom_setup(void *engine, h5_voice voice,
+    const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate)
 {
+    struct h5_tom_s *t = (struct h5_tom_s *)engine;
+
+    if (sample_rate == 0u) {
+        sample_rate = H5_DEFAULT_SAMPLE_RATE;
+    }
+
+    /* Initial state. */
+    h5_env_init(&t->env);
+    h5_env_init(&t->env_click);
+    h5_noise_init_voice(&t->noise, voice, sample_rate);
+    h5_svf_reset(&t->noise_filter);
+    h5_svf_reset(&t->out_filter);
+    t->phase = 0u;
+    t->base_inc = 0;
+    t->bend_q16 = 0;
+    t->noise_pitch_q16 = 0;
+    t->filter_bend_q16 = H5_TOM_FILTER_BEND_1_Q16;
+    t->tone_gain_q16 = 0;
+    t->noise_gain_q16 = 0;
+    t->body_gain_q16 = 0;
+    t->click_gain_q16 = 0;
+    t->pf.k50 = 0;
+    t->pf.k20 = 0;
+    t->pf.l50 = 0;
+    t->pf.l20 = 0;
+    t->head.active = 0u;
+    if (voice == H5_VOICE_TOM_2) {
+        t->filter_bend_q16 = H5_TOM_FILTER_BEND_2_Q16;
+    } else if (voice == H5_VOICE_TOM_3) {
+        t->filter_bend_q16 = H5_TOM_FILTER_BEND_3_Q16;
+    }
+
+    h5_tom_apply(engine, params, sample_rate);
+}
+
+void h5_tom_trigger(void *engine)
+{
+    struct h5_tom_s *t = (struct h5_tom_s *)engine;
+
     t->phase = 0u;
     h5_env_trigger(&t->env);
     h5_env_trigger(&t->env_click);
     h5_svf_reset(&t->noise_filter);
     h5_svf_reset(&t->out_filter);
-    t->pf_l50 = 0;
-    t->pf_l20 = 0;
-    t->active = 1u;
+    t->pf.l50 = 0;
+    t->pf.l20 = 0;
+    t->head.active = 1u;
 }
 
-int32_t h5_tom_process(struct h5_tom_s *t)
+int32_t h5_tom_process(void *engine)
 {
+    struct h5_tom_s *t = (struct h5_tom_s *)engine;
     int32_t env, env_click, env3;
-    int32_t inc, s, s2, cutoff, u, nf, tone, noise, sum;
-    int32_t body, click, mix, half, blended, out;
+    int32_t s, s2, cutoff, nf, body, click, mix, half, blended;
 
-    if (!t->active) {
+    if (!t->head.active) {
         return 0;
     }
 
@@ -561,55 +653,42 @@ int32_t h5_tom_process(struct h5_tom_s *t)
     if (env <= 0 && env_click <= 0
         && t->env.state == H5_ENV_DONE
         && t->env_click.state == H5_ENV_DONE) {
-        t->active = 0u;
+        t->head.active = 0u;
         return 0;
     }
 
     env3 = h5_cube_q30(env);
 
     /* Pitch envelope: f = TonePitch * 1.5^(Bend * env^3 / 12). */
-    inc = h5_pitch_lookup(&t->pitch_curve, env3);
-    t->phase = (t->phase + (uint32_t)inc) & 0x0FFFFFFFu;
-
-    s = h5_sine_interp(t->phase);
-    s2 = h5_sine_interp((uint32_t)(s >> 5));
+    h5_tone_osc(&t->phase, &t->pitch_curve, env3, &s, &s2);
 
     /* fc_n = (NoisePitch + 2000*env^3)*(1 - FB*(1 - env^3)). */
     cutoff = h5_sweep_cutoff(t->noise_pitch_q16, t->filter_bend_q16,
         env3 >> 14);
-    h5_sweep_apply(&t->noise_sweep, cutoff, &t->noise_filter);
-    u = h5_prefilter(&t->pf_l50, &t->pf_l20, t->pf_k50, t->pf_k20, h5_noise_next(&t->noise));
-    nf = h5_svf_run(&t->noise_filter, u);
+    nf = h5_noise_band(&t->pf, &t->noise, &t->noise_filter, &t->noise_sweep,
+        cutoff);
 
     /* Body: env^3 * (1-Click)^0.7 * (NoiseTone^0.7*s + 0.3*(1-NoiseTone)^0.7*noise). */
-    tone = h5_mul_q16(s, t->tone_gain_q16);
-    noise = h5_mul_q16(nf, t->noise_gain_q16);
-    sum = h5_sat_add_q31(tone, noise);
-    body = h5_mul_q30(sum, env3);
-    body = h5_mul_q16(body, t->body_gain_q16);
+    body = h5_body_mix(s, nf, env3, t->tone_gain_q16, t->noise_gain_q16,
+        t->body_gain_q16);
 
     /* Transient burst: env_c^10 * Click^0.7 * nf. Skip it once the burst
      * envelope is silent. */
     click = 0;
     if (env_click > 0) {
-        click = h5_mul_q16(nf, t->click_gain_q16);
-        click = h5_mul_q30(click, h5_pow10_q30(env_click));
+        click = h5_burst(nf, t->click_gain_q16, env_click);
     }
     mix = h5_sat_add_q31(body, click);
 
     /* The sine-shaper branch rides the body envelope so it decays with
      * the sound instead of ringing on. */
-    half = h5_mul_q30((int32_t)(((int64_t)s2 + (int64_t)s) / 2), env3);
-    half = h5_mul_q16(half, t->body_gain_q16);
+    half = h5_mul_q16(h5_shaped_sine(s, s2, env3), t->body_gain_q16);
     blended = h5_sat_add_q31(
         h5_mul_q16(mix, H5_Q16_ONE - H5_TOM_DRIVE_Q16),
         h5_mul_q16(half, h5_mul_q16(H5_TOM_DRIVE_Q16,
         H5_TOM_SHAPER_WEIGHT_Q16)));
-    out = h5_softclip_q31(blended);
 
-    out = h5_mul_q16(out, H5_OUT_GAIN_Q16);
-    out = h5_svf_run(&t->out_filter, out);
-    return out;
+    return h5_output_stage(blended, &t->out_filter);
 }
 
 /*
@@ -625,37 +704,11 @@ int32_t h5_tom_process(struct h5_tom_s *t)
  *   out     = 1.5*tanh(blend) * 1.10479 -> LP at NoisePitch*Sweep contour
  */
 
-void h5_snare_init(struct h5_snare_s *sn, uint32_t sample_rate)
-{
-    size_t i;
-
-    h5_env_init(&sn->env);
-    h5_env_init(&sn->env_click);
-    h5_noise_init_voice(&sn->noise, H5_VOICE_SNARE, sample_rate);
-    for (i = 0u; i < 4u; i++) {
-        h5_svf_reset(&sn->rattle[i]);
-    }
-    h5_svf_reset(&sn->out_filter);
-    sn->phase = 0u;
-    sn->base_inc = 0;
-    sn->bend_q16 = 0;
-    sn->noise_pitch_q16 = 0;
-    sn->tone_gain_q16 = 0;
-    sn->noise_gain_q16 = 0;
-    sn->body_gain_q16 = 0;
-    sn->click_gain_q16 = 0;
-    sn->sweep_q16 = 0;
-    sn->pf_k50 = 0;
-    sn->pf_k20 = 0;
-    sn->pf_l50 = 0;
-    sn->pf_l20 = 0;
-    sn->active = 0u;
-}
-
-void h5_snare_configure(struct h5_snare_s *sn,
+/* Apply the parameters to the Snare engine. */
+static void h5_snare_apply(void *engine,
     const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate)
 {
-    int64_t inc;
+    struct h5_snare_s *sn = (struct h5_snare_s *)engine;
     int32_t noise_tone, click, decay;
 
     if (sample_rate == 0u) {
@@ -676,12 +729,7 @@ void h5_snare_configure(struct h5_snare_s *sn,
     sn->body_gain_q16 = h5_pow07_q16(H5_Q16_ONE - click);
     sn->click_gain_q16 = h5_pow07_q16(click);
 
-    inc = ((int64_t)params[H5_PARAM_TONE_PITCH] << 12) / sample_rate;
-    if (inc < 1) {
-        inc = 1;
-    }
-    sn->base_inc = (int32_t)inc;
-    h5_pitch_build(&sn->pitch_curve, sn->base_inc, sn->bend_q16);
+    h5_setup_pitch(&sn->pitch_curve, &sn->base_inc, params, sample_rate);
 
     /* Body envelope: AR^3, 1 ms attack, Decay release. Transient: AR^10,
      * 1 ms attack, 0.2*Decay + 0.1 s release. */
@@ -690,7 +738,7 @@ void h5_snare_configure(struct h5_snare_s *sn,
         (2 * decay + H5_Q16_ONE) / 10, sample_rate);
 
     /* Rattle resonators, output low-pass, pre-filter: parameter change. */
-    h5_pf_setup(&sn->pf_k50, &sn->pf_k20, 0, sample_rate);
+    h5_pf_setup(&sn->pf, sample_rate);
     h5_svf_tune(&sn->rattle[0], H5_SVF_BP, H5_SNARE_RATTLE_FREQ_1,
         H5_SNARE_RATTLE_Q_1, sample_rate);
     h5_svf_tune(&sn->rattle[1], H5_SVF_BP, H5_SNARE_RATTLE_FREQ_2,
@@ -707,8 +755,47 @@ void h5_snare_configure(struct h5_snare_s *sn,
         sample_rate);
 }
 
-void h5_snare_trigger(struct h5_snare_s *sn)
+void h5_snare_setup(void *engine, h5_voice voice,
+    const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate)
 {
+    struct h5_snare_s *sn = (struct h5_snare_s *)engine;
+    size_t i;
+
+    (void)voice;
+
+    if (sample_rate == 0u) {
+        sample_rate = H5_DEFAULT_SAMPLE_RATE;
+    }
+
+    /* Initial state. */
+    h5_env_init(&sn->env);
+    h5_env_init(&sn->env_click);
+    h5_noise_init_voice(&sn->noise, H5_VOICE_SNARE, sample_rate);
+    for (i = 0u; i < 4u; i++) {
+        h5_svf_reset(&sn->rattle[i]);
+    }
+    h5_svf_reset(&sn->out_filter);
+    sn->phase = 0u;
+    sn->base_inc = 0;
+    sn->bend_q16 = 0;
+    sn->noise_pitch_q16 = 0;
+    sn->tone_gain_q16 = 0;
+    sn->noise_gain_q16 = 0;
+    sn->body_gain_q16 = 0;
+    sn->click_gain_q16 = 0;
+    sn->sweep_q16 = 0;
+    sn->pf.k50 = 0;
+    sn->pf.k20 = 0;
+    sn->pf.l50 = 0;
+    sn->pf.l20 = 0;
+    sn->head.active = 0u;
+
+    h5_snare_apply(engine, params, sample_rate);
+}
+
+void h5_snare_trigger(void *engine)
+{
+    struct h5_snare_s *sn = (struct h5_snare_s *)engine;
     size_t i;
 
     sn->phase = 0u;
@@ -718,19 +805,20 @@ void h5_snare_trigger(struct h5_snare_s *sn)
         h5_svf_reset(&sn->rattle[i]);
     }
     h5_svf_reset(&sn->out_filter);
-    sn->pf_l50 = 0;
-    sn->pf_l20 = 0;
-    sn->active = 1u;
+    sn->pf.l50 = 0;
+    sn->pf.l20 = 0;
+    sn->head.active = 1u;
 }
 
-int32_t h5_snare_process(struct h5_snare_s *sn)
+int32_t h5_snare_process(void *engine)
 {
-    int32_t env, env_click, env3, inc, s, s2, u;
-    int32_t tone, rattle, sum, body, click, mix, half, blended;
-    int32_t cutoff, out;
+    struct h5_snare_s *sn = (struct h5_snare_s *)engine;
+    int32_t env, env_click, env3, s, s2, u;
+    int32_t rattle, body, click, mix, half, blended;
+    int32_t cutoff;
     size_t i;
 
-    if (!sn->active) {
+    if (!sn->head.active) {
         return 0;
     }
 
@@ -739,22 +827,17 @@ int32_t h5_snare_process(struct h5_snare_s *sn)
     if (env <= 0 && env_click <= 0
         && sn->env.state == H5_ENV_DONE
         && sn->env_click.state == H5_ENV_DONE) {
-        sn->active = 0u;
+        sn->head.active = 0u;
         return 0;
     }
 
     env3 = h5_cube_q30(env);
 
     /* Pitch envelope: f = TonePitch * 1.5^(Bend * env^3 / 12). */
-    inc = h5_pitch_lookup(&sn->pitch_curve, env3);
-    sn->phase = (sn->phase + (uint32_t)inc) & 0x0FFFFFFFu;
-
-    s = h5_sine_interp(sn->phase);
-    s2 = h5_sine_interp((uint32_t)(s >> 5));
+    h5_tone_osc(&sn->phase, &sn->pitch_curve, env3, &s, &s2);
 
     /* Four weighted band-pass filters on the band-limited held noise. */
-    u = h5_prefilter(&sn->pf_l50, &sn->pf_l20, sn->pf_k50, sn->pf_k20,
-        h5_noise_next(&sn->noise));
+    u = h5_pf_run(&sn->pf, h5_noise_next(&sn->noise));
     rattle = 0;
     for (i = 0u; i < 4u; i++) {
         rattle = h5_sat_add_q31(rattle, h5_mul_q16(
@@ -763,23 +846,19 @@ int32_t h5_snare_process(struct h5_snare_s *sn)
 
     /* Body: env^3 * (1-Click)^0.7
      *       * (NoiseTone^0.7*s + 0.3*(1-NoiseTone)^0.7*rattle). */
-    tone = h5_mul_q16(s, sn->tone_gain_q16);
-    sum = h5_sat_add_q31(tone, h5_mul_q16(rattle, sn->noise_gain_q16));
-    body = h5_mul_q30(sum, env3);
-    body = h5_mul_q16(body, sn->body_gain_q16);
+    body = h5_body_mix(s, rattle, env3, sn->tone_gain_q16, sn->noise_gain_q16,
+        sn->body_gain_q16);
 
     /* Transient: env_c^10 * Click^0.7 * rattle. Skip it once the burst
      * envelope is silent. */
     click = 0;
     if (env_click > 0) {
-        click = h5_mul_q16(rattle, sn->click_gain_q16);
-        click = h5_mul_q30(click, h5_pow10_q30(env_click));
+        click = h5_burst(rattle, sn->click_gain_q16, env_click);
     }
     mix = h5_sat_add_q31(body, click);
 
     /* The shaper branch rides the body envelope (see Tom). */
-    half = h5_mul_q30((int32_t)(((int64_t)s2 + (int64_t)s) / 2), env3);
-    half = h5_mul_q16(half, sn->body_gain_q16);
+    half = h5_mul_q16(h5_shaped_sine(s, s2, env3), sn->body_gain_q16);
     blended = h5_sat_add_q31(
         h5_mul_q16(mix, H5_Q16_ONE - H5_SNARE_DRIVE_Q16),
         h5_mul_q16(half, h5_mul_q16(H5_SNARE_DRIVE_Q16,
@@ -790,9 +869,19 @@ int32_t h5_snare_process(struct h5_snare_s *sn)
     cutoff = h5_snare_cutoff(sn->noise_pitch_q16, sn->sweep_q16, env3 >> 14);
     h5_sweep_apply(&sn->out_sweep, cutoff, &sn->out_filter);
 
-    out = h5_softclip_q31(blended);
-
-    out = h5_mul_q16(out, H5_OUT_GAIN_Q16);
-    out = h5_svf_run(&sn->out_filter, out);
-    return out;
+    return h5_output_stage(blended, &sn->out_filter);
 }
+
+/* The engine operation sets. The voice table in h5_voice.c pairs each set
+ * with the engine state it belongs to. */
+const struct h5_engine_ops h5_kick_ops = {
+    h5_kick_setup, h5_kick_apply, h5_kick_trigger, h5_kick_process
+};
+
+const struct h5_engine_ops h5_snare_ops = {
+    h5_snare_setup, h5_snare_apply, h5_snare_trigger, h5_snare_process
+};
+
+const struct h5_engine_ops h5_tom_ops = {
+    h5_tom_setup, h5_tom_apply, h5_tom_trigger, h5_tom_process
+};

@@ -25,7 +25,13 @@ make check    # builds and runs the test harness (writes WAV files to build/)
 The library is built with `-std=c99 -Wall -Wextra -Werror`, and the build
 enables floating-point diagnostics when the compiler supports them to keep
 the library integer-only. Unwind tables are disabled where the compiler
-supports the flags.
+supports the flags, and the library is built without the stack-protector
+canary.
+
+The default is size (`-Os`). The translation units that run once per sample
+(the engines, the filter, the envelope, the noise source, the mixer and the
+tables) are compiled at `-O2`, because their speed matters more than their
+size; everything else stays at `-Os`.
 
 ## Usage
 

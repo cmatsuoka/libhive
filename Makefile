@@ -28,7 +28,13 @@ NO_UNWIND := $(shell $(CC) -fno-asynchronous-unwind-tables -fno-unwind-tables \
 	-Werror -E -x c /dev/null >/dev/null 2>&1 && \
 	echo "-fno-asynchronous-unwind-tables -fno-unwind-tables")
 
-LIB_CFLAGS  := $(CSTD) $(WARN) $(OPT) $(FLOAT_WARN) $(NO_UNWIND) $(INCLUDES) $(CFLAGS) -MMD -MP
+# The library keeps no stack arrays that need runtime protection, and the
+# per-frame canary costs bytes in every frame. The test harness and the
+# example are host programs and keep the default protection.
+NO_STACK_PROTECTOR := $(shell $(CC) -fno-stack-protector -Werror -E -x c \
+	/dev/null >/dev/null 2>&1 && echo "-fno-stack-protector")
+
+LIB_CFLAGS  := $(CSTD) $(WARN) $(OPT) $(FLOAT_WARN) $(NO_UNWIND) $(NO_STACK_PROTECTOR) $(INCLUDES) $(CFLAGS) -MMD -MP
 TEST_CFLAGS := $(CSTD) $(WARN) $(OPT) $(NO_UNWIND) $(INCLUDES) $(CFLAGS) -MMD -MP
 
 BUILD := build
@@ -39,16 +45,17 @@ LIB_OBJS  := $(patsubst src/%.c,$(BUILD)/src/%.o,$(LIB_SRCS))
 TEST_OBJS := $(patsubst test/%.c,$(BUILD)/test/%.o,$(TEST_SRCS))
 
 # Size-first default, but keep the per-sample DSP translation units at -O2.
-# The lifecycle and parameter-table files are cold and stay at $(OPT).
+# The files listed here run once per sample, so their code size matters
+# less than their speed. The render loop's per-frame dispatch (h5.c,
+# h5_voice.c) and the parameter table are cold with respect to the sample
+# rate and stay at $(OPT).
 HOT_SRCS := \
-	src/h5.c \
 	src/h5_engines.c \
 	src/h5_filter.c \
 	src/h5_fixed.c \
 	src/h5_noise.c \
 	src/h5_mixer.c \
-	src/h5_tables.c \
-	src/h5_voice.c
+	src/h5_tables.c
 HOT_OBJS := $(patsubst src/%.c,$(BUILD)/src/%.o,$(HOT_SRCS))
 
 $(HOT_OBJS): EXTRA_OPT := $(HOT_OPT)

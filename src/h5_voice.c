@@ -3,99 +3,61 @@
  *
  * Each public voice maps to one of the three engine types. The Tom engine is
  * instantiated three times, so the Tom voices keep independent state.
+ *
+ * The voice-to-engine map lives in one table: every voice names the engine
+ * operation set it runs and where its engine state sits inside the context.
+ * The dispatch functions are then a table lookup and an indirect call, and
+ * the engine's activity flag is at a fixed offset in every engine state, so
+ * the render loop learns that a voice has finished without a second
+ * dispatch.
  */
 
 #include "h5_internal.h"
 
-/* Map a Tom voice to its engine index, or -1 for any other voice. The three
- * Tom voices are contiguous in h5_voice. */
-static int h5_tom_index(h5_voice voice)
-{
-    if (voice >= H5_VOICE_TOM_1 && voice <= H5_VOICE_TOM_3) {
-        return (int)(voice - H5_VOICE_TOM_1);
-    }
-    return -1;
-}
+/* The voice-to-engine map. The offsets are fixed by the context layout, so
+ * the table is shared by every context and a context carries no per-voice
+ * pointers. */
+const struct h5_voice_slot h5_voice_slots[H5_VOICE_COUNT] = {
+    { &h5_kick_ops, offsetof(struct h5_context_s, kick) },
+    { &h5_snare_ops, offsetof(struct h5_context_s, snare) },
+    { &h5_tom_ops, offsetof(struct h5_context_s, tom[0]) },
+    { &h5_tom_ops, offsetof(struct h5_context_s, tom[1]) },
+    { &h5_tom_ops, offsetof(struct h5_context_s, tom[2]) }
+};
 
-void h5_voice_init_all(struct h5_context_s *ctx)
+void h5_voice_setup_all(struct h5_context_s *ctx)
 {
-    int i;
+    h5_voice voice;
 
+    /* Setting every voice up resets it, so no voice is sounding any more. */
     ctx->active_mask = 0u;
-    h5_kick_init(&ctx->kick, ctx->sample_rate);
-    h5_kick_configure(&ctx->kick, ctx->voice_params[H5_VOICE_KICK],
-        ctx->sample_rate);
-    for (i = 0; i < H5_TOM_COUNT; i++) {
-        h5_voice voice = (h5_voice)(H5_VOICE_TOM_1 + i);
-
-        h5_tom_init(&ctx->tom[i], voice, ctx->sample_rate);
-        h5_tom_configure(&ctx->tom[i], ctx->voice_params[voice],
-            ctx->sample_rate);
+    for (voice = 0; voice < H5_VOICE_COUNT; voice++) {
+        h5_voice_slots[voice].ops->setup(h5_voice_engine(ctx, voice), voice,
+            ctx->voice_params[voice], ctx->sample_rate);
     }
-    h5_snare_init(&ctx->snare, ctx->sample_rate);
-    h5_snare_configure(&ctx->snare, ctx->voice_params[H5_VOICE_SNARE],
-        ctx->sample_rate);
-}
-
-void h5_voice_reset_all(struct h5_context_s *ctx)
-{
-    h5_voice_init_all(ctx);
 }
 
 void h5_voice_configure(struct h5_context_s *ctx, h5_voice voice)
 {
-    int tom = h5_tom_index(voice);
-
-    if (voice == H5_VOICE_KICK) {
-        h5_kick_configure(&ctx->kick, ctx->voice_params[H5_VOICE_KICK],
-            ctx->sample_rate);
-    } else if (tom >= 0) {
-        h5_tom_configure(&ctx->tom[tom], ctx->voice_params[voice],
-            ctx->sample_rate);
-    } else if (voice == H5_VOICE_SNARE) {
-        h5_snare_configure(&ctx->snare, ctx->voice_params[H5_VOICE_SNARE],
-            ctx->sample_rate);
-    }
+    h5_voice_slots[voice].ops->configure(h5_voice_engine(ctx, voice),
+        ctx->voice_params[voice], ctx->sample_rate);
 }
 
 void h5_voice_trigger(struct h5_context_s *ctx, h5_voice voice)
 {
-    int tom = h5_tom_index(voice);
-
-    if (voice == H5_VOICE_KICK) {
-        h5_kick_trigger(&ctx->kick);
-    } else if (tom >= 0) {
-        h5_tom_trigger(&ctx->tom[tom]);
-    } else if (voice == H5_VOICE_SNARE) {
-        h5_snare_trigger(&ctx->snare);
+    if ((unsigned)voice >= (unsigned)H5_VOICE_COUNT) {
+        return;
     }
-    if ((unsigned)voice < (unsigned)H5_VOICE_COUNT) {
-        ctx->active_mask |= (uint32_t)1u << (unsigned)voice;
-    }
+    h5_voice_slots[voice].ops->trigger(h5_voice_engine(ctx, voice));
+    ctx->active_mask |= (uint32_t)1u << (unsigned)voice;
 }
 
 void h5_voice_trigger_instrument(struct h5_context_s *ctx,
     h5_instrument instrument)
 {
-    switch (instrument) {
-    case H5_INSTR_KICK:
-        h5_voice_trigger(ctx, H5_VOICE_KICK);
-        break;
-    case H5_INSTR_SNARE:
-        h5_voice_trigger(ctx, H5_VOICE_SNARE);
-        break;
-    case H5_INSTR_TOM_1:
-        h5_voice_trigger(ctx, H5_VOICE_TOM_1);
-        break;
-    case H5_INSTR_TOM_2:
-        h5_voice_trigger(ctx, H5_VOICE_TOM_2);
-        break;
-    case H5_INSTR_TOM_3:
-        h5_voice_trigger(ctx, H5_VOICE_TOM_3);
-        break;
-    default:
-        break;
-    }
+    /* The instrument and voice enums share their order (checked at compile
+     * time), so the mapping is a cast. */
+    h5_voice_trigger(ctx, (h5_voice)instrument);
 }
 
 bool h5_is_active(const h5_context handle)
@@ -103,36 +65,4 @@ bool h5_is_active(const h5_context handle)
     const struct h5_context_s *ctx = (const struct h5_context_s *)handle;
 
     return ctx != 0 && ctx->active_mask != 0u;
-}
-
-bool h5_voice_is_active(const struct h5_context_s *ctx, h5_voice voice)
-{
-    int tom = h5_tom_index(voice);
-
-    if (voice == H5_VOICE_KICK) {
-        return ctx->kick.active != 0u;
-    }
-    if (tom >= 0) {
-        return ctx->tom[tom].active != 0u;
-    }
-    if (voice == H5_VOICE_SNARE) {
-        return ctx->snare.active != 0u;
-    }
-    return false;
-}
-
-int32_t h5_voice_process(struct h5_context_s *ctx, h5_voice voice)
-{
-    int tom = h5_tom_index(voice);
-
-    if (voice == H5_VOICE_KICK) {
-        return h5_kick_process(&ctx->kick);
-    }
-    if (tom >= 0) {
-        return h5_tom_process(&ctx->tom[tom]);
-    }
-    if (voice == H5_VOICE_SNARE) {
-        return h5_snare_process(&ctx->snare);
-    }
-    return 0;
 }
