@@ -92,6 +92,23 @@
 #define H5_SNARE_CLICK_WEIGHT_Q16 (63 * H5_Q16_ONE / 80)
 #define H5_SNARE_SWEEP_DEPTH_Q16 (H5_Q16_ONE / 2)
 
+/* The Snare's drive stage. The shipped preset runs the drive at 0.13. At
+ * that setting the driven tone carries a third harmonic 21 dB below its
+ * fundamental and a second harmonic 40 dB below it, against 32 dB and 41 dB
+ * for the undriven tone. The third harmonic is what carries the drive: the
+ * envelope eats most of a harmonic that sits in the tone path, so the
+ * weight is calibrated on the rendered result rather than on the core.
+ * The weights are relative to the fundamental, which the core keeps at
+ * full scale. */
+#define H5_SNARE_DRIVE_H2_Q16 (642)   /* 0.0098 */
+#define H5_SNARE_DRIVE_H3_Q16 (8000)  /* 0.122 */
+
+/* The drive harmonics add to the peak of the tone core, so the core is
+ * scaled down to leave room and the tone gain carries the matching boost.
+ * Without this the core would clip on every hit. */
+#define H5_SNARE_DRIVE_HEADROOM_Q16 (58368) /* 0.891 */
+#define H5_SNARE_TONE_BOOST_Q16 (73588)    /* 1.1229 */
+
 /* Rattle bank: the wire noise is broadband, with a broad body resonance
  * around 700 Hz, a narrow wire peak near 1.2 kHz and a gentle upper-mid
  * lift. The broadband term carries the noise floor of the rattle, the three
@@ -700,7 +717,7 @@ int32_t h5_tom_process(void *engine)
  *   env_c   = AR^10(1 ms, 0.1*Decay+0.04)
  *   rattle  = broadband wire noise plus three weighted band-passes over
  *             the band-limited held noise
- *   body    = env^3 * (NoiseTone^0.5*(1-Click)^0.25*core
+ *   body    = env^3 * (NoiseTone^0.125*(1-Click)^0.25*core
  *                     + 0.3*(1-NoiseTone)^0.7*(1-Click)^0.7*rattle)
  *   click   = env_c^10 * 63/80*Click^0.25 * rattle
  *   out     = tanh(1.5*mix) * 1.10 -> LP at NoisePitch*Sweep contour
@@ -726,12 +743,12 @@ static void h5_snare_apply(void *engine,
     sn->sweep_q16 = params[H5_PARAM_SWEEP];
 
     /* The Snare's Noise/Tone control is a balance, not a tone amount: the
-     * shell tone follows the square root of the setting while the rattle
-     * follows (1-NoiseTone)^0.7, so both sides move together and the knob
-     * sweeps from a bare shell to a bare rattle. The square root is the
-     * integer square root, so no table is needed. */
-    sn->tone_gain_q16 = h5_mul_q16(h5_sqrt_q16(noise_tone),
-        h5_pow025_q16(H5_Q16_ONE - click));
+     * shell tone follows the eighth root of the setting (NoiseTone^0.125)
+     * while the rattle follows (1-NoiseTone)^0.7, so both sides move together
+     * and the knob sweeps from a bare shell to a bare rattle. The eighth root
+     * is three integer square roots, so no table is needed. */
+    sn->tone_gain_q16 = h5_mul_q16(h5_mul_q16(h5_pow0125_q16(noise_tone),
+        h5_pow025_q16(H5_Q16_ONE - click)), H5_SNARE_TONE_BOOST_Q16);
     sn->noise_gain_q16 = h5_mul_q16(
         h5_mul_q16(h5_pow07_q16(H5_Q16_ONE - noise_tone),
             H5_SNARE_NOISE_WEIGHT_Q16),
@@ -820,7 +837,7 @@ void h5_snare_trigger(void *engine)
 int32_t h5_snare_process(void *engine)
 {
     struct h5_snare_s *sn = (struct h5_snare_s *)engine;
-    int32_t env, env_click, env3, s, st, u;
+    int32_t env, env_click, env3, s, st, s2, s3, core, u;
     int32_t rattle, body, click, mix;
     int32_t cutoff;
     size_t i;
@@ -843,6 +860,17 @@ int32_t h5_snare_process(void *engine)
     /* Pitch envelope: f = TonePitch * 1.5^(Bend * env^3 / 12). */
     h5_tone_osc(&sn->phase, &sn->pitch_curve, env3, &s, &st);
 
+    /* The drive stage: the second and third harmonics of the tone phase.
+     * The triangle in the core carries its third harmonic anti-phase with
+     * the sine, so the drive term is subtracted to lift it rather than to
+     * cancel it. */
+    s2 = h5_sine_interp(sn->phase * 2u);
+    s3 = h5_sine_interp(sn->phase * 3u);
+    core = h5_sat_add_q31(h5_tone_core(s, st),
+        h5_sat_add_q31(h5_mul_q16(s2, H5_SNARE_DRIVE_H2_Q16),
+            -h5_mul_q16(s3, H5_SNARE_DRIVE_H3_Q16)));
+    core = h5_mul_q16(core, H5_SNARE_DRIVE_HEADROOM_Q16);
+
     /* The rattle: broadband wire noise plus three resonances. */
     u = h5_pf_run(&sn->pf, h5_noise_next(&sn->noise));
     rattle = h5_mul_q16(u, H5_SNARE_RATTLE_WIRE_Q16);
@@ -853,7 +881,7 @@ int32_t h5_snare_process(void *engine)
 
     /* Body: env^3 * (1-Click)^0.25
      *       * (NoiseTone^0.125*core + 0.3*(1-NoiseTone)^0.7*rattle). */
-    body = h5_body_mix(h5_tone_core(s, st), rattle, env3, sn->tone_gain_q16,
+    body = h5_body_mix(core, rattle, env3, sn->tone_gain_q16,
         sn->noise_gain_q16);
 
     /* Transient: env_c^10 * Click^0.7 * rattle. Skip it once the burst
