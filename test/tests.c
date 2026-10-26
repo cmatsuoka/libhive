@@ -1215,6 +1215,161 @@ static int command_mixer_volume(h5_context ctx)
     return 0;
 }
 
+static int command_mixer_levels(h5_context ctx)
+{
+    const size_t frames = frames_for_ms(TEST_RATE, 300u);
+    const h5_instrument instruments[H5_INSTR_COUNT] = {
+        H5_INSTR_KICK, H5_INSTR_SNARE,
+        H5_INSTR_TOM_1, H5_INSTR_TOM_2, H5_INSTR_TOM_3
+    };
+    int32_t levels[H5_INSTR_COUNT];
+    h5_status status;
+    size_t i;
+
+    /* Validation. */
+    status = h5_get_instrument_levels(0, levels);
+    if (status != H5_ERR_INVALID_CONTEXT) {
+        fail("h5_get_instrument_levels(NULL, ...) did not reject a null context");
+    } else {
+        ok("h5_get_instrument_levels() rejects a null context");
+    }
+
+    status = h5_get_instrument_levels(ctx, 0);
+    if (status != H5_ERR_INVALID_CONTEXT) {
+        fail("h5_get_instrument_levels() did not reject a null array");
+    } else {
+        ok("h5_get_instrument_levels() rejects a null array");
+    }
+
+    /* The level array reflects the most recent h5_process() block. h5_reset()
+     * cuts any still-ringing voices and zeroes the levels, giving a clean
+     * "no activity" baseline. */
+    h5_reset(ctx);
+
+    memset(levels, 0xA5, sizeof(levels));
+    if (h5_get_instrument_levels(ctx, levels) != H5_OK ||
+        levels[H5_INSTR_KICK] != 0 || levels[H5_INSTR_SNARE] != 0 ||
+        levels[H5_INSTR_TOM_1] != 0 || levels[H5_INSTR_TOM_2] != 0 ||
+        levels[H5_INSTR_TOM_3] != 0) {
+        fail("levels are non-zero when no voice is active");
+    } else {
+        ok("all levels are zero when no voice is active");
+    }
+
+    /* Each instrument reports activity only on itself. */
+    for (i = 0u; i < (size_t)H5_INSTR_COUNT; i++) {
+        h5_instrument target = instruments[i];
+        size_t j;
+        int others_silent = 1;
+        int target_audible = 0;
+
+        h5_reset(ctx);
+        h5_trigger(ctx, target);
+        free(render(ctx, frames));
+
+        if (h5_get_instrument_levels(ctx, levels) != H5_OK) {
+            fail("h5_get_instrument_levels() failed after a trigger");
+            return -1;
+        }
+        for (j = 0u; j < (size_t)H5_INSTR_COUNT; j++) {
+            if (instruments[j] == target) {
+                if (levels[j] > 0) {
+                    target_audible = 1;
+                }
+            } else if (levels[j] != 0) {
+                others_silent = 0;
+            }
+        }
+        if (!target_audible) {
+            fail("the triggered instrument reports no level");
+            return -1;
+        }
+        if (!others_silent) {
+            fail("an untriggered instrument reports a non-zero level");
+            return -1;
+        }
+    }
+    ok("only the triggered instrument reports a non-zero level");
+
+    /* Level follows the instrument volume before pan. */
+    {
+        int32_t level_full, level_half, level_zero;
+        int32_t level_left, level_right;
+
+        configure_tom_for_mix(ctx, H5_VOICE_TOM_1, 220);
+
+        h5_reset(ctx);
+        h5_set_instrument_volume(ctx, H5_INSTR_TOM_1, H5_Q16_ONE);
+        h5_set_instrument_pan(ctx, H5_INSTR_TOM_1, H5_Q16_ONE / 2);
+        h5_trigger(ctx, H5_INSTR_TOM_1);
+        free(render(ctx, frames));
+        if (h5_get_instrument_levels(ctx, levels) != H5_OK) {
+            fail("could not read full-volume levels");
+            return -1;
+        }
+        level_full = levels[H5_INSTR_TOM_1];
+
+        h5_reset(ctx);
+        h5_set_instrument_volume(ctx, H5_INSTR_TOM_1, H5_Q16_ONE / 2);
+        h5_set_instrument_pan(ctx, H5_INSTR_TOM_1, H5_Q16_ONE / 2);
+        h5_trigger(ctx, H5_INSTR_TOM_1);
+        free(render(ctx, frames));
+        if (h5_get_instrument_levels(ctx, levels) != H5_OK) {
+            fail("could not read half-volume levels");
+            return -1;
+        }
+        level_half = levels[H5_INSTR_TOM_1];
+
+        h5_reset(ctx);
+        h5_set_instrument_volume(ctx, H5_INSTR_TOM_1, 0);
+        h5_set_instrument_pan(ctx, H5_INSTR_TOM_1, H5_Q16_ONE / 2);
+        h5_trigger(ctx, H5_INSTR_TOM_1);
+        free(render(ctx, frames));
+        if (h5_get_instrument_levels(ctx, levels) != H5_OK) {
+            fail("could not read zero-volume levels");
+            return -1;
+        }
+        level_zero = levels[H5_INSTR_TOM_1];
+
+        if (level_zero != 0 || level_half <= 0 || level_full <= level_half) {
+            fail("instrument level does not scale with volume");
+            return -1;
+        }
+        ok("instrument level scales with volume");
+
+        /* Pan does not change the mono instrument level. */
+        h5_reset(ctx);
+        h5_set_instrument_volume(ctx, H5_INSTR_TOM_1, H5_Q16_ONE);
+        h5_set_instrument_pan(ctx, H5_INSTR_TOM_1, 0);
+        h5_trigger(ctx, H5_INSTR_TOM_1);
+        free(render(ctx, frames));
+        if (h5_get_instrument_levels(ctx, levels) != H5_OK) {
+            fail("could not read left-pan levels");
+            return -1;
+        }
+        level_left = levels[H5_INSTR_TOM_1];
+
+        h5_reset(ctx);
+        h5_set_instrument_volume(ctx, H5_INSTR_TOM_1, H5_Q16_ONE);
+        h5_set_instrument_pan(ctx, H5_INSTR_TOM_1, H5_Q16_ONE);
+        h5_trigger(ctx, H5_INSTR_TOM_1);
+        free(render(ctx, frames));
+        if (h5_get_instrument_levels(ctx, levels) != H5_OK) {
+            fail("could not read right-pan levels");
+            return -1;
+        }
+        level_right = levels[H5_INSTR_TOM_1];
+
+        if (level_left != level_right) {
+            fail("instrument level depends on pan");
+            return -1;
+        }
+        ok("instrument level is independent of pan");
+    }
+
+    return 0;
+}
+
 static int command_mixer_saturation(void)
 {
     int ok_status = 1;
@@ -1313,6 +1468,7 @@ int command_mixer(void)
 
     if (command_mixer_pan(ctx) != 0 ||
         command_mixer_volume(ctx) != 0 ||
+        command_mixer_levels(ctx) != 0 ||
         command_mixer_saturation() != 0 ||
         command_mixer_render(ctx) != 0) {
         h5_destroy_context(ctx);

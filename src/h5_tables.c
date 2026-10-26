@@ -244,24 +244,27 @@ int32_t h5_semitone_ratio_interp(int32_t semitones_q16)
 }
 
 /*
- * Soft-clip shaper: the engine output gain is 1.5 * tanh(u), with the lookup
- * table holding tanh(u) as Q15 for u = j/H5_SOFTCLIP_STEPS. The input is the
- * Q30 mix with one headroom bit, so u = |m| / 2^31 stays in [0, 1] and the
- * 49-entry table ends at tanh(1). The 1.5 gain is applied after the
- * interpolation (entry * 1.5 << 15 turns the Q15 tanh into a Q30 result), so
- * the function returns 1.5 * tanh(u) in Q30 with headroom to 2.0. Negative
- * arguments are negated via odd symmetry.
+ * Soft-clip shaper: the engine mix is saturated with tanh(1.5 * mix), with
+ * the lookup table holding the saturation curve as Q15 over the argument
+ * range [0, 1.5] in H5_SOFTCLIP_STEPS uniform steps, so entry j holds
+ * tanh(1.5 * j / 24). The input is the Q31 mix, so the index is 24 * |mix|
+ * and the entry's argument is 1.5 * |mix|; the interpolation is scaled to Q30
+ * by the caller, and the result never exceeds tanh(1.5) ~= 0.905, so the
+ * output ceiling is one. As |mix| approaches 1.0 the curve is held at the
+ * last entry; the flat tail makes the hold inaudible. Negative arguments use
+ * odd symmetry.
  * Regenerate with: python3 tools/gen_softclip_table.py
  */
 const int16_t h5_softclip[H5_SOFTCLIP_SIZE] = {
-         0,    683,   1365,   2045,   2724,   3401,   4075,   4745,
-      5411,   6073,   6729,   7380,   8025,   8664,   9295,   9919,
-     10535,  11143,  11742,  12333,  12914,  13486,  14048,  14600,
-     15142,  15674,  16195,  16706,  17205,  17694,  18173,  18640,
-     19096,  19541,  19976,  20399,  20812,  21214,  21605,  21986,
-     22356,  22715,  23065,  23404,  23734,  24053,  24363,  24664,
-     24955
+         0,   2045,   4075,   6073,   8025,   9919,  11742,  13486,
+     15142,  16706,  18173,  19541,  20812,  21986,  23065,  24053,
+     24955,  25775,  26518,  27190,  27796,  28340,  28829,  29267,
+     29659
 };
+
+/* The index scale of the shaper lookup: the table's argument is 1.5 * |mix|
+ * and its steps are 1/16 of that argument, so the index is 24 * |mix|. */
+#define H5_SOFTCLIP_INPUT_SCALE 24u
 
 int32_t h5_softclip_q31(int32_t m)
 {
@@ -271,10 +274,10 @@ int32_t h5_softclip_q31(int32_t m)
     int64_t v;
     int neg = m < 0;
 
-    /* w = |m| * STEPS in Q31 u-units: the entry index is w >> 31 and the
+    /* w = |m| * 24 in Q31 index units: the entry index is w >> 31 and the
      * fractional part is bits 30..15 of w. */
     w = (uint64_t)(neg ? -(int64_t)m : (int64_t)m)
-        * (uint64_t)H5_SOFTCLIP_STEPS;
+        * (uint64_t)H5_SOFTCLIP_INPUT_SCALE;
     idx = (uint32_t)(w >> 31);
     frac = (uint32_t)((w >> 15) & 0xFFFFu);
     if (idx > (H5_SOFTCLIP_SIZE - 2u)) {
@@ -282,11 +285,10 @@ int32_t h5_softclip_q31(int32_t m)
         frac = 0xFFFFu;
     }
     y0 = h5_softclip[idx];
-    y1 = h5_softclip[idx + 1];
-    interp = y0 + (int32_t)h5_shr_round(h5_mulwide(y1 - y0, (int32_t)frac),
-        16u);
-    /* Q15 tanh * (1.5 << 15) = Q30 result (1.0 = 1 << 30, max 1.5). */
-    v = (int64_t)interp * 49152;
+    y1 = h5_softclip[idx + 1u];
+    interp = y0 + (int32_t)h5_shr_round(h5_mulwide(y1 - y0, (int32_t)frac), 16u);
+    /* Q15 tanh -> Q30 result (1.0 = 1 << 30). */
+    v = (int64_t)interp * 32768;
     v = h5_sat_i32(v);
     return neg ? -v : v;
 }

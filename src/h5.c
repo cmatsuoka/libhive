@@ -81,7 +81,20 @@ void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
         return;
     }
 
-    if (ctx == 0 || !h5_is_active(ctx)) {
+    if (ctx == 0) {
+        memset(stereo_out, 0, frames * 2u * sizeof(int16_t));
+        return;
+    }
+
+    {
+        h5_instrument v;
+
+        for (v = 0; v < H5_INSTR_COUNT; v++) {
+            ctx->voice_level[v] = 0;
+        }
+    }
+
+    if (!h5_is_active(ctx)) {
         memset(stereo_out, 0, frames * 2u * sizeof(int16_t));
         return;
     }
@@ -105,7 +118,23 @@ void h5_process(h5_context handle, int16_t *stereo_out, size_t frames)
             }
             out = h5_voice_process(ctx, voice, &still_active);
             if (out != 0) {
+                int64_t level;
+                int32_t volume;
+
                 h5_mix_add(ctx, (h5_instrument)voice, out, &left, &right);
+
+                volume = ctx->voice_params[voice][H5_PARAM_VOLUME];
+                level = (int64_t)out * (int64_t)volume;
+                if (level < 0) {
+                    level = -level;
+                }
+                level = h5_shr_round(level, 30u);
+                if (level > H5_Q16_ONE) {
+                    level = H5_Q16_ONE;
+                }
+                if ((int32_t)level > ctx->voice_level[voice]) {
+                    ctx->voice_level[voice] = (int32_t)level;
+                }
             }
             if (!still_active) {
                 ctx->active_mask &= ~bit;
@@ -153,6 +182,21 @@ h5_status h5_get_instrument_pan(const h5_context handle,
     int32_t *out)
 {
     return h5_get_param(handle, (h5_voice)instrument, H5_PARAM_PAN, out);
+}
+
+h5_status h5_get_instrument_levels(const h5_context handle, int32_t *levels)
+{
+    const struct h5_context_s *ctx = (const struct h5_context_s *)handle;
+    size_t i;
+
+    if (ctx == 0 || levels == 0) {
+        return H5_ERR_INVALID_CONTEXT;
+    }
+
+    for (i = 0u; i < (size_t)H5_INSTR_COUNT; i++) {
+        levels[i] = ctx->voice_level[i];
+    }
+    return H5_OK;
 }
 
 h5_status h5_trigger(h5_context handle, h5_instrument instrument)

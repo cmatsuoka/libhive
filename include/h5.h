@@ -191,7 +191,23 @@ h5_status h5_get_instrument_pan(const h5_context ctx,
     h5_instrument instrument,
     int32_t *out);
 
-/* Trigger one of the five instruments. Each Tom instrument starts its own Tom
+/* Read back the per-instrument peak levels for the most recent
+ * h5_process() block. `levels` must point to an array of at least
+ * H5_INSTR_COUNT int32_t values. On success the array is filled with the
+ * peak mono level for every instrument in Q16.16 (0 .. H5_Q16_ONE), in the
+ * order of the h5_instrument enum.
+ *
+ * Each level is the peak of the instrument's own voice after its own volume
+ * but before the stereo pan and before summing into the final mix. The
+ * values are reset to zero at the start of every h5_process() call and
+ * updated only while the corresponding instrument is sounding, so a host
+ * can use the array to light per-instrument activity indicators.
+ *
+ * A null context or a null `levels` is rejected with H5_ERR_INVALID_CONTEXT. */
+h5_status h5_get_instrument_levels(const h5_context ctx,
+    int32_t *levels);
+
+/* Trigger one of the five instruments. Each Tom instrument triggers its own Tom
  * voice, so Tom 1, Tom 2 and Tom 3 can sound simultaneously. */
 h5_status h5_trigger(h5_context ctx, h5_instrument instrument);
 

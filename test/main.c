@@ -262,6 +262,14 @@ static int command_api(void)
         ok("h5_process() clears the whole block");
     }
 
+    memset(block, 0x5A, sizeof(block));
+    h5_process(0, block, sizeof(block) / (2u * sizeof(int16_t)));
+    if (block[0] != 0 || block[63] != 0) {
+        fail("h5_process(NULL, ...) did not clear the whole block");
+    } else {
+        ok("h5_process(NULL, ...) clears the whole block");
+    }
+
     h5_destroy_context((h5_context)ctx);
 
     ctx = context_new(48000);

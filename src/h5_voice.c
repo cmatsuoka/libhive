@@ -32,6 +32,7 @@ void h5_voice_setup_all(struct h5_context_s *ctx)
     /* Setting every voice up resets it, so no voice is sounding any more. */
     ctx->active_mask = 0u;
     for (voice = 0; voice < H5_VOICE_COUNT; voice++) {
+        ctx->voice_level[voice] = 0;
         h5_voice_slots[voice].ops->setup(h5_voice_engine(ctx, voice), voice,
             ctx->voice_params[voice], ctx->sample_rate);
     }

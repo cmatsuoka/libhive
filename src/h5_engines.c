@@ -2,32 +2,34 @@
  * h5_engines.c - per-voice DSP engines.
  *
  * Every tone generator follows one architecture: a tonal branch (a sine
- * oscillator with a drive blend into a shaped sine branch), a sustained
+ * oscillator with a drive blend into a triangle branch), a sustained
  * noise branch (filtered noise under its own AR envelope) and a short
  * transient burst on the filtered noise. All three branches sum into a
  * soft-clip shaper and leave through a fixed output filter.
  *
  *   - Tone path: the tone envelope is a linear AR whose value is cubed;
  *     the cube drives both the tone amplitude and the pitch exponent.
- *     The tone branch pairs a sine oscillator with a shaped sine
- *     (0.5*(s2+s)) through the Drive blend; this approximates the
- *     original device's filtered triangle core. The Kick tone attack
- *     is 0.005*Decay and Drive blends the sine with the shaped-sine
- *     branch whose weight per engine differs (Kick 4.7, Tom/Snare 1.0);
- *     the shaper branch follows the body envelope so it decays with the
- *     sound.
+ *     The tone branch pairs a sine oscillator with the triangle of the
+ *     same phase through the Drive blend: the triangle carries the odd
+ *     harmonics that give the tone its body, the way the original
+ *     device's triangle core does. The Kick tone attack is 0.005*Decay and
+ *     the Drive blends the sine with the triangle branch, whose weight
+ *     per engine differs; the triangle branch follows the body envelope
+ *     so it decays with the sound.
  *   - Sustained noise: filtered noise * AR(noise_attack, Decay release) *
  *     noiseWeight.
  *   - Transient burst: AR^10 over the same filtered noise with a 1 ms
- *     attack, weighted Click^0.7.
+ *     attack, weighted Click^0.25.
  *   - Pitch envelope: f = Pitch * 1.5^(Bend*env^3/12) applies to the
  *     tonal branch of each voice.
  *   - Noise cutoff sweep: (NoisePitch + 2000*env_n^3)
  *     * (1 - FilterBend*(1 - env_n^3)); FilterBend 0.5 on the Kick and
  *     0.55/0.57/0.56 per Tom instance. The noise passes a fixed 50 Hz
  *     high-pass / 20 kHz low-pass band limit first.
- *   - Output: 1.5 * tanh(mix) * 1.10479 * output filter. The engine emits
- *     Q30 (1.0 = 1 << 30) with one headroom bit; the mixer applies the
+ *   - Output: tanh(1.5 * mix) * 1.10 * output filter. The saturation
+ *     sits inside the curve, so a mix below full scale is compressed
+ *     smoothly and the shaper never clips; the engine emits Q30
+ *     (1.0 = 1 << 30) with one headroom bit, and the mixer applies the
  *     user Volume exactly once.
  *
  * Drive, Resonance and Gain are engine constants (0.13, 1.0, 1.0), not
@@ -35,7 +37,7 @@
  * envelopes and the filters; the noise generator free-runs.
  *
  * The three engines share the parts of the per-sample chain that are
- * identical: the oscillator, the shaped sine, the transient burst, the body
+ * identical: the oscillator, the triangle, the transient burst, the body
  * mix and the output stage live in the shared helpers below. What stays
  * engine-specific is the branch structure each voice actually uses.
  */
@@ -46,66 +48,64 @@
  * 1.5^(n/12) curve into 2^(n*log2(1.5)/12), which the semitone table covers. */
 #define H5_BEND_LOG2_3_2_Q16 (38336)
 
-/* Fixed output gain after the shaper: 1.10479. */
-#define H5_OUT_GAIN_Q16 (72404)
+/* Fixed output gain after the shaper: 1.10. */
+#define H5_OUT_GAIN_Q16 (72090)
 
-/* One-pole fixed cutoffs, Hz in Q16: the noise band limit (50 Hz high-pass,
- * 20 kHz low-pass) and a dark 338.6 Hz low-pass that tones down the Kick's
- * transient burst. */
+/* One-pole fixed cutoffs, Hz in Q16: the noise band limit (50 Hz high-pass
+ * and 20 kHz low-pass). */
 #define H5_PF_LO_HZ (50 * H5_Q16_ONE)
 #define H5_PF_HI_HZ (20000 * H5_Q16_ONE)
-#define H5_PF_338_HZ (22190489) /* 338.6 Hz in Q16 */
 
 /* Cutoff sweep contribution at env = 1, Hz in Q16. */
 #define H5_NOISE_SWEEP_Q16 (2000 * H5_Q16_ONE)
 
+/* The tone core: the sine and the triangle of the same phase mixed with
+ * this weight. The triangle carries the odd harmonics that give the tone
+ * its body; the weight is the same for the three voices. */
+#define H5_TONE_TRI_WEIGHT_Q16 (45 * H5_Q16_ONE / 100)
+
 /* Kick path weights and constants, Q16. */
-#define H5_KICK_TONE_WEIGHT_Q16 (9 * H5_Q16_ONE / 10)  /* 0.9 */
-#define H5_KICK_NOISE_WEIGHT_Q16 (3 * H5_Q16_ONE / 10) /* 0.3 */
-#define H5_KICK_CLICK_WEIGHT_Q16 (9 * H5_Q16_ONE / 10) /* 0.9 */
-#define H5_KICK_DRIVE_Q16 (13 * H5_Q16_ONE / 100)
-#define H5_KICK_SHAPER_WEIGHT_Q16 (47 * H5_Q16_ONE / 10)
+#define H5_KICK_TONE_WEIGHT_Q16 (85 * H5_Q16_ONE / 100) /* 0.85 */
+#define H5_KICK_NOISE_WEIGHT_Q16 (4 * H5_Q16_ONE / 10) /* 0.4 */
+#define H5_KICK_CLICK_WEIGHT_Q16 (66 * H5_Q16_ONE / 100) /* 0.66 */
 #define H5_KICK_FILTER_BEND_Q16 (H5_Q16_ONE / 2)
 #define H5_KICK_RESONANCE_Q16 H5_Q16_ONE
 #define H5_KICK_OUT_HP_HZ 15
 #define H5_KICK_OUT_Q16 (46341) /* 1/sqrt(2) */
 
 /* Tom path constants, Q16. */
-#define H5_TOM_DRIVE_Q16 (13 * H5_Q16_ONE / 100)
-#define H5_TOM_SHAPER_WEIGHT_Q16 H5_Q16_ONE
 #define H5_TOM_RESONANCE_Q16 H5_Q16_ONE
 #define H5_TOM_OUT_HP_HZ 25
 #define H5_TOM_OUT_Q16 (46341) /* 1/sqrt(2) */
-#define H5_TOM_NOISE_WEIGHT_Q16 (3 * H5_Q16_ONE / 10)
-#define H5_TOM_CLICK_GAIN_Q16 H5_Q16_ONE
+#define H5_TOM_NOISE_WEIGHT_Q16 (45 * H5_Q16_ONE / 100)
+#define H5_TOM_CLICK_GAIN_Q16 (75 * H5_Q16_ONE / 100)
+#define H5_TOM_TONE_SCALE_Q16 (46 * H5_Q16_ONE / 100)
 #define H5_TOM_FILTER_BEND_1_Q16 (55 * H5_Q16_ONE / 100)
 #define H5_TOM_FILTER_BEND_2_Q16 (57 * H5_Q16_ONE / 100)
 #define H5_TOM_FILTER_BEND_3_Q16 (56 * H5_Q16_ONE / 100)
 
 /* Snare path constants, Q16. */
-#define H5_SNARE_DRIVE_Q16 (13 * H5_Q16_ONE / 100)
-#define H5_SNARE_SHAPER_WEIGHT_Q16 H5_Q16_ONE
 #define H5_SNARE_OUT_Q16 H5_Q16_ONE
 #define H5_SNARE_ATTACK_Q16 H5_MS_Q16(1)
 #define H5_SNARE_CLICK_ATTACK_Q16 H5_MS_Q16(1)
 #define H5_SNARE_NOISE_WEIGHT_Q16 (3 * H5_Q16_ONE / 10)
+#define H5_SNARE_CLICK_WEIGHT_Q16 (63 * H5_Q16_ONE / 80)
 #define H5_SNARE_SWEEP_DEPTH_Q16 (H5_Q16_ONE / 2)
 
-/* Rattle band-pass bank: two narrow wooden resonances around 330 and
- * 600 Hz, a wide low-mid body band near 220 Hz and a broad 2.6 kHz shelf,
- * with per-band gain weights that shape the sum. */
-#define H5_SNARE_RATTLE_FREQ_1 (335 * H5_Q16_ONE)
-#define H5_SNARE_RATTLE_FREQ_2 (596 * H5_Q16_ONE)
-#define H5_SNARE_RATTLE_FREQ_3 (220 * H5_Q16_ONE)
-#define H5_SNARE_RATTLE_FREQ_4 (2600 * H5_Q16_ONE)
-#define H5_SNARE_RATTLE_Q_1 (4 * H5_Q16_ONE)
-#define H5_SNARE_RATTLE_Q_2 (4 * H5_Q16_ONE)
-#define H5_SNARE_RATTLE_Q_3 (27 * H5_Q16_ONE / 20)
-#define H5_SNARE_RATTLE_Q_4 (2 * H5_Q16_ONE / 5)
-#define H5_SNARE_RATTLE_WEIGHT_1 (110904)
-#define H5_SNARE_RATTLE_WEIGHT_2 (240624)
-#define H5_SNARE_RATTLE_WEIGHT_3 (85368)
-#define H5_SNARE_RATTLE_WEIGHT_4 (31284)
+/* Rattle bank: the wire noise is broadband, with a broad body resonance
+ * around 700 Hz, a narrow wire peak near 1.2 kHz and a gentle upper-mid
+ * lift. The broadband term carries the noise floor of the rattle, the three
+ * resonances shape it. */
+#define H5_SNARE_RATTLE_FREQ_1 (720 * H5_Q16_ONE)
+#define H5_SNARE_RATTLE_FREQ_2 (1180 * H5_Q16_ONE)
+#define H5_SNARE_RATTLE_FREQ_3 (3200 * H5_Q16_ONE)
+#define H5_SNARE_RATTLE_Q_1 (11 * H5_Q16_ONE / 10)
+#define H5_SNARE_RATTLE_Q_2 (7 * H5_Q16_ONE / 2)
+#define H5_SNARE_RATTLE_Q_3 (4 * H5_Q16_ONE / 5)
+#define H5_SNARE_RATTLE_WIRE_Q16 (H5_Q16_ONE)
+#define H5_SNARE_RATTLE_WEIGHT_1 (305000)
+#define H5_SNARE_RATTLE_WEIGHT_2 (15400)
+#define H5_SNARE_RATTLE_WEIGHT_3 (39322)
 
 /* Milliseconds to Q16 seconds (round-half-up). */
 #define H5_MS_Q16(ms) (((ms) * H5_Q16_ONE + 500) / 1000)
@@ -267,29 +267,47 @@ static void h5_setup_pitch(struct h5_pitch_curve_s *curve, int32_t *base_inc,
 }
 
 /* The tone oscillator: advance the phase by the increment the pitch curve
- * gives for the current envelope, then read the sine and its quarter-phase
- * partner. */
+ * gives for the current envelope, then read the sine and the triangle of the
+ * same phase.
+ *
+ * The triangle is the shape the tone core is built from: it starts at zero
+ * and reaches its peak with the sine, and its odd harmonics are what give
+ * the tone its body. The piecewise value rises over the first quarter of the
+ * period, falls over the middle half and rises over the last quarter, peaking
+ * at 2^30, so it needs no table. */
 static void h5_tone_osc(uint32_t *phase, const struct h5_pitch_curve_s *curve,
-    int32_t env3, int32_t *s, int32_t *s2)
+    int32_t env3, int32_t *s, int32_t *st)
 {
     int32_t inc = h5_pitch_lookup(curve, env3);
+    uint32_t frac;
+    int32_t d;
 
     *phase = (*phase + (uint32_t)inc) & 0x0FFFFFFFu;
     *s = h5_sine_interp(*phase);
-    *s2 = h5_sine_interp((uint32_t)(*s >> 5));
+
+    /* frac is the phase as a 30-bit fraction. The triangle rises over the
+     * first quarter, falls over the middle half and rises over the last
+     * quarter: it starts at zero with the sine, peaks where the sine peaks
+     * and is an odd function of the phase, so it carries odd harmonics
+     * only. The value is Q30, with the peak at 2^30. */
+    frac = (*phase << 2) & 0x3FFFFFFFu;
+    if (frac < (1u << 28)) {
+        d = (int32_t)(frac << 2);
+    } else if (frac < (3u << 28)) {
+        d = (int32_t)((1ll << 31) - ((int64_t)frac << 2));
+    } else {
+        d = (int32_t)(((int64_t)frac << 2) - (1ll << 32));
+    }
+    *st = d;
 }
 
-/* The mean of the sine and its quarter-phase partner: the core of the
- * shaped-sine branch. */
-static int32_t h5_sine_mean(int32_t s, int32_t s2)
+/* The tone core: the sine and the triangle of the same phase, mixed with
+ * the triangle weight. Both are Q31, so the mix is Q31. */
+static int32_t h5_tone_core(int32_t s, int32_t st)
 {
-    return (int32_t)(((int64_t)s2 + (int64_t)s) / 2);
-}
-
-/* The shaped-sine branch under the body envelope. */
-static int32_t h5_shaped_sine(int32_t s, int32_t s2, int32_t env3)
-{
-    return h5_mul_q30(h5_sine_mean(s, s2), env3);
+    return h5_sat_add_q31(
+        h5_mul_q16(s, H5_Q16_ONE - H5_TONE_TRI_WEIGHT_Q16),
+        (int32_t)((uint32_t)h5_mul_q16(st, H5_TONE_TRI_WEIGHT_Q16) << 1));
 }
 
 /* The transient burst: the source scaled by the click gain and by the tenth
@@ -302,15 +320,17 @@ static int32_t h5_burst(int32_t src, int32_t gain_q16, int32_t env_c)
 }
 
 /* The body mix: the tone under its gain plus the noise under its gain, both
- * under the cubed body envelope and the body gain. */
-static int32_t h5_body_mix(int32_t s, int32_t noise_src, int32_t env3,
-    int32_t tone_gain_q16, int32_t noise_gain_q16, int32_t body_gain_q16)
+ * under the cubed body envelope. The two gains carry their own Click
+ * factors: the tone follows the soft (1-Click)^0.25 law and the noise the
+ * steeper (1-Click)^0.7 one, so the control trades the noise body away much
+ * faster than the tone. */
+static int32_t h5_body_mix(int32_t core, int32_t noise_src, int32_t env3,
+    int32_t tone_gain_q16, int32_t noise_gain_q16)
 {
-    int32_t tone = h5_mul_q16(s, tone_gain_q16);
+    int32_t tone = h5_mul_q16(core, tone_gain_q16);
     int32_t sum = h5_sat_add_q31(tone, h5_mul_q16(noise_src, noise_gain_q16));
 
-    sum = h5_mul_q30(sum, env3);
-    return h5_mul_q16(sum, body_gain_q16);
+    return h5_mul_q30(sum, env3);
 }
 
 /* The output stage: the soft-clip shaper, the fixed output gain and the
@@ -333,9 +353,9 @@ static int32_t h5_noise_band(struct h5_pf_s *pf, struct h5_noise_s *noise,
 }
 
 /* Per-band rattle weights (with the folded output scale), Q16. */
-static const int32_t h5_snare_rattle_weight[4] = {
+static const int32_t h5_snare_rattle_weight[3] = {
     H5_SNARE_RATTLE_WEIGHT_1, H5_SNARE_RATTLE_WEIGHT_2,
-    H5_SNARE_RATTLE_WEIGHT_3, H5_SNARE_RATTLE_WEIGHT_4
+    H5_SNARE_RATTLE_WEIGHT_3
 };
 
 /*
@@ -344,16 +364,16 @@ static const int32_t h5_snare_rattle_weight[4] = {
  * Signal flow:
  *   env_n  = AR(~2 ms, Decay)
  *   env_t  = AR(0.005*Decay, Decay), used cubed
- *   env_c  = AR^10(1 ms, 0.2*Decay+0.1)
+ *   env_c  = AR^10(1 ms, 0.1*Decay+0.04)
  *   fc_n   = (NoisePitch + 2000*env_n^3) * (1 - 0.5*(1 - env_n^3))
  *   nf     = SVF_LP(bandlimit(u_hold); fc_n, Resonance)
- *   noise  = nf * env_n * 0.3*(1-NoiseTone)^0.7 * (1-Click)^0.7
- *   click  = LP338(nf) * env_c^10 * 0.9*Click^0.7
+ *   noise  = nf * env_n * 0.4*(1-NoiseTone)^0.7 * (1-Click)^0.7
+ *   click  = nf * env_c^10 * 0.66*Click^0.25
  *   f      = TonePitch * 1.5^(Bend*env_t^3/12)
- *   s      = sin(2*pi*phi), s2 = sin((pi/2)*s)
- *   tone   = env_t^3 * 0.9*NoiseTone^0.7*(1-Click)^0.7
- *            * ((1-Drive)*s + Drive*4.7*0.5*(s2+s))
- *   out    = 1.5*tanh(tone+noise+click) * 1.10479 -> HP15
+ *   s      = sin(2*pi*phi), st = the triangle of the same phase
+ *   core   = 0.55*s + 0.45*st
+ *   tone   = env_t^3 * 0.85*NoiseTone^0.125*(1-Click)^0.25 * core
+ *   out    = tanh(1.5*(tone+noise+click)) * 1.10 -> HP15
  *   (the single Decay control sets both the tone and noise envelopes)
  */
 
@@ -363,7 +383,7 @@ static void h5_kick_apply(void *engine,
     const int32_t params[H5_PARAM_COUNT], uint32_t sample_rate)
 {
     struct h5_kick_s *k = (struct h5_kick_s *)engine;
-    int32_t click, decay, noise_attack;
+    int32_t click, decay;
 
     if (sample_rate == 0u) {
         sample_rate = H5_DEFAULT_SAMPLE_RATE;
@@ -378,13 +398,13 @@ static void h5_kick_apply(void *engine,
     /* NoiseTone is the tone amount; Click splits tone and sustain noise
      * through mirrored x^0.7 curves. */
     k->tone_gain_q16 = h5_mul_q16(H5_KICK_TONE_WEIGHT_Q16,
-        h5_mul_q16(h5_pow07_q16(params[H5_PARAM_NOISE_TONE]),
-            h5_pow07_q16(H5_Q16_ONE - click)));
+        h5_mul_q16(h5_pow0125_q16(params[H5_PARAM_NOISE_TONE]),
+            h5_pow025_q16(H5_Q16_ONE - click)));
     k->noise_gain_q16 = h5_mul_q16(H5_KICK_NOISE_WEIGHT_Q16,
         h5_mul_q16(h5_pow07_q16(H5_Q16_ONE - params[H5_PARAM_NOISE_TONE]),
             h5_pow07_q16(H5_Q16_ONE - click)));
     k->click_gain_q16 = h5_mul_q16(H5_KICK_CLICK_WEIGHT_Q16,
-        h5_pow07_q16(click));
+        h5_pow025_q16(click));
 
     h5_setup_pitch(&k->pitch_curve, &k->base_inc, params, sample_rate);
 
@@ -392,12 +412,11 @@ static void h5_kick_apply(void *engine,
      * fast; the noise env shares the tone release; the click burst keeps
      * a ~1 ms attack with its own 0.2*Decay+0.1 release. */
     h5_env_set_times(&k->env_tone, decay / 200, decay, sample_rate);
-    noise_attack = (2 * decay) / 10 + H5_Q16_ONE / 10;
     h5_env_set_times(&k->env_noise, H5_MS_Q16(2), decay, sample_rate);
-    h5_env_set_times(&k->env_click, H5_MS_Q16(1), noise_attack, sample_rate);
+    h5_env_set_times(&k->env_click, H5_MS_Q16(1),
+        (decay + (2 * H5_Q16_ONE) / 5) / 10, sample_rate);
 
     h5_pf_setup(&k->pf, sample_rate);
-    k->pf_k338 = h5_pf_k(H5_PF_338_HZ, sample_rate);
     h5_svf_tune(&k->out_filter, H5_SVF_HP,
         H5_KICK_OUT_HP_HZ * H5_Q16_ONE, H5_KICK_OUT_Q16, sample_rate);
     h5_sweep_build(&k->noise_sweep, H5_SVF_LP, H5_KICK_RESONANCE_Q16,
@@ -436,8 +455,6 @@ void h5_kick_setup(void *engine, h5_voice voice,
     k->pf.k20 = 0;
     k->pf.l50 = 0;
     k->pf.l20 = 0;
-    k->pf_k338 = 0;
-    k->pf_l338 = 0;
     k->head.active = 0u;
 
     h5_kick_apply(engine, params, sample_rate);
@@ -455,7 +472,6 @@ void h5_kick_trigger(void *engine)
     h5_svf_reset(&k->out_filter);
     k->pf.l50 = 0;
     k->pf.l20 = 0;
-    k->pf_l338 = 0;
     k->head.active = 1u;
 }
 
@@ -463,8 +479,7 @@ int32_t h5_kick_process(void *engine)
 {
     struct h5_kick_s *k = (struct h5_kick_s *)engine;
     int32_t env_n, env_t, env_c, tone3, env3;
-    int32_t s, s2, cutoff, nf, noise, trans, tone, sum;
-    int32_t blend;
+    int32_t s, st, cutoff, nf, noise, trans, tone, sum;
 
     if (!k->head.active) {
         return 0;
@@ -486,7 +501,7 @@ int32_t h5_kick_process(void *engine)
     tone3 = h5_cube_q30(env_t);
 
     /* Pitch: f = TonePitch * 1.5^(Bend * tone3 / 12). */
-    h5_tone_osc(&k->phase, &k->pitch_curve, tone3, &s, &s2);
+    h5_tone_osc(&k->phase, &k->pitch_curve, tone3, &s, &st);
 
     /* Noise band limit then swept low-pass:
      * fc_n = (NoisePitch + 2000*env_n^3) * (1 - 0.5*(1 - env_n^3)). */
@@ -496,29 +511,21 @@ int32_t h5_kick_process(void *engine)
     nf = h5_noise_band(&k->pf, &k->noise, &k->noise_filter, &k->noise_sweep,
         cutoff);
 
-    /* Sustained noise: nf * env_n * 0.3*(1-NoiseTone)^0.7*(1-Click)^0.7. */
+    /* Sustained noise: nf * env_n * 0.4*(1-NoiseTone)^0.7*(1-Click)^0.25. */
     noise = h5_mul_q30(nf, env_n);
     noise = h5_mul_q16(noise, k->noise_gain_q16);
 
-    /* Transient burst: LP338(nf) * env_c^10 * 0.9*Click^0.7. The burst
-     * carries one headroom bit past the sustained branches; the fixed
-     * low-pass keeps its energy centered below the mids. The branch is
-     * silent once the burst envelope has decayed, so skip its work. */
+    /* Transient burst: nf * env_c^10 * 0.66*Click^0.25. The burst
+     * carries one headroom bit past the sustained branches. The branch
+     * is silent once the burst envelope has decayed, so skip its work. */
     trans = 0;
     if (env_c > 0) {
-        nf = h5_sat_add_q31(k->pf_l338, h5_mul_q30(h5_sat_sub_q31(nf,
-            k->pf_l338), k->pf_k338));
-        k->pf_l338 = nf;
         trans = h5_burst(nf, k->click_gain_q16, env_c);
     }
 
-    /* Tone: env^3 * 0.9*NoiseTone^0.7*(1-Click)^0.7
-     *       * ((1-Drive)*s + Drive*4.7*0.5*(s2+s)). */
-    blend = h5_sat_add_q31(
-        h5_mul_q16(s, H5_Q16_ONE - H5_KICK_DRIVE_Q16),
-        h5_mul_q16(h5_sine_mean(s, s2),
-            h5_mul_q16(H5_KICK_DRIVE_Q16, H5_KICK_SHAPER_WEIGHT_Q16)));
-    tone = h5_mul_q30(blend, tone3);
+    /* Tone: env^3 * 0.85*NoiseTone^0.125*(1-Click)^0.25
+     *       * ((1-Drive)*s + Drive*5*st). */
+    tone = h5_mul_q30(h5_tone_core(s, st), tone3);
     tone = h5_mul_q16(tone, k->tone_gain_q16);
 
     sum = h5_sat_add_q31(tone, noise);
@@ -533,15 +540,13 @@ int32_t h5_kick_process(void *engine)
  *
  * Signal flow:
  *   env     = AR^3(0.005*Decay, Decay)
- *   env_c   = AR^10(1 ms, 0.25*Decay)
+ *   env_c   = AR^10(1 ms, 0.1*Decay+0.04)
  *   fc_n    = (NoisePitch + 2000*env^3) * (1 - FB*(1 - env^3))
  *   nf      = SVF_LP(bandlimit(u_hold); fc_n, Resonance)
- *   body    = env^3 * (1-Click)^0.7 * (NoiseTone^0.7*s
- *                                          + 0.3*(1-NoiseTone)^0.7*nf)
- *   click   = env_c^10 * Click^0.7 * nf
- *   out     = 1.5*tanh((1-Drive)*mix
- *                       + Drive*env^3*(1-Click)^0.7*0.5*(s2+s))
- *             * 1.10479 -> HP25
+ *   body    = env^3 * (0.46*NoiseTone^0.125*(1-Click)^0.25*core
+ *                     + 0.45*(1-NoiseTone)^0.7*(1-Click)^0.7*nf)
+ *   click   = env_c^10 * 0.75*Click^0.25 * nf
+ *   out     = tanh(1.5*mix) * 1.10 -> HP25
  *   (each Tom instance tunes its own filter-bend depth)
  */
 
@@ -563,11 +568,14 @@ static void h5_tom_apply(void *engine,
     t->bend_q16 = params[H5_PARAM_BEND];
     t->noise_pitch_q16 = params[H5_PARAM_NOISE_PITCH];
 
-    t->tone_gain_q16 = h5_pow07_q16(noise_tone);
+    t->tone_gain_q16 = h5_mul_q16(h5_pow0125_q16(noise_tone),
+        h5_mul_q16(H5_TOM_TONE_SCALE_Q16,
+            h5_pow025_q16(H5_Q16_ONE - click)));
     t->noise_gain_q16 = h5_mul_q16(
-        h5_pow07_q16(H5_Q16_ONE - noise_tone), H5_TOM_NOISE_WEIGHT_Q16);
-    t->body_gain_q16 = h5_pow07_q16(H5_Q16_ONE - click);
-    t->click_gain_q16 = h5_mul_q16(h5_pow07_q16(click),
+        h5_mul_q16(h5_pow07_q16(H5_Q16_ONE - noise_tone),
+            H5_TOM_NOISE_WEIGHT_Q16),
+        h5_pow07_q16(H5_Q16_ONE - click));
+    t->click_gain_q16 = h5_mul_q16(h5_pow025_q16(click),
         H5_TOM_CLICK_GAIN_Q16);
 
     h5_setup_pitch(&t->pitch_curve, &t->base_inc, params, sample_rate);
@@ -575,7 +583,8 @@ static void h5_tom_apply(void *engine,
     /* Body envelope: AR^3 with a 0.005*Decay attack and the Decay release.
      * Transient envelope: AR^10, 1 ms attack, 0.25*Decay release. */
     h5_env_set_times(&t->env, decay / 200, decay, sample_rate);
-    h5_env_set_times(&t->env_click, H5_MS_Q16(1), decay / 4, sample_rate);
+    h5_env_set_times(&t->env_click, H5_MS_Q16(1),
+        (decay + (2 * H5_Q16_ONE) / 5) / 10, sample_rate);
 
     h5_pf_setup(&t->pf, sample_rate);
     h5_svf_tune(&t->out_filter, H5_SVF_HP,
@@ -608,7 +617,6 @@ void h5_tom_setup(void *engine, h5_voice voice,
     t->filter_bend_q16 = H5_TOM_FILTER_BEND_1_Q16;
     t->tone_gain_q16 = 0;
     t->noise_gain_q16 = 0;
-    t->body_gain_q16 = 0;
     t->click_gain_q16 = 0;
     t->pf.k50 = 0;
     t->pf.k20 = 0;
@@ -642,7 +650,7 @@ int32_t h5_tom_process(void *engine)
 {
     struct h5_tom_s *t = (struct h5_tom_s *)engine;
     int32_t env, env_click, env3;
-    int32_t s, s2, cutoff, nf, body, click, mix, half, blended;
+    int32_t s, st, cutoff, nf, body, click, mix;
 
     if (!t->head.active) {
         return 0;
@@ -660,7 +668,7 @@ int32_t h5_tom_process(void *engine)
     env3 = h5_cube_q30(env);
 
     /* Pitch envelope: f = TonePitch * 1.5^(Bend * env^3 / 12). */
-    h5_tone_osc(&t->phase, &t->pitch_curve, env3, &s, &s2);
+    h5_tone_osc(&t->phase, &t->pitch_curve, env3, &s, &st);
 
     /* fc_n = (NoisePitch + 2000*env^3)*(1 - FB*(1 - env^3)). */
     cutoff = h5_sweep_cutoff(t->noise_pitch_q16, t->filter_bend_q16,
@@ -668,9 +676,10 @@ int32_t h5_tom_process(void *engine)
     nf = h5_noise_band(&t->pf, &t->noise, &t->noise_filter, &t->noise_sweep,
         cutoff);
 
-    /* Body: env^3 * (1-Click)^0.7 * (NoiseTone^0.7*s + 0.3*(1-NoiseTone)^0.7*noise). */
-    body = h5_body_mix(s, nf, env3, t->tone_gain_q16, t->noise_gain_q16,
-        t->body_gain_q16);
+    /* Body: env^3 * (0.46*NoiseTone^0.125*core
+     *                 + 0.45*(1-NoiseTone)^0.7*(1-Click)^0.7*noise). */
+    body = h5_body_mix(h5_tone_core(s, st), nf, env3, t->tone_gain_q16,
+        t->noise_gain_q16);
 
     /* Transient burst: env_c^10 * Click^0.7 * nf. Skip it once the burst
      * envelope is silent. */
@@ -680,15 +689,7 @@ int32_t h5_tom_process(void *engine)
     }
     mix = h5_sat_add_q31(body, click);
 
-    /* The sine-shaper branch rides the body envelope so it decays with
-     * the sound instead of ringing on. */
-    half = h5_mul_q16(h5_shaped_sine(s, s2, env3), t->body_gain_q16);
-    blended = h5_sat_add_q31(
-        h5_mul_q16(mix, H5_Q16_ONE - H5_TOM_DRIVE_Q16),
-        h5_mul_q16(half, h5_mul_q16(H5_TOM_DRIVE_Q16,
-        H5_TOM_SHAPER_WEIGHT_Q16)));
-
-    return h5_output_stage(blended, &t->out_filter);
+    return h5_output_stage(mix, &t->out_filter);
 }
 
 /*
@@ -696,12 +697,13 @@ int32_t h5_tom_process(void *engine)
  *
  * Signal flow:
  *   env     = AR^3(1 ms, Decay)
- *   env_c   = AR^10(1 ms, 0.2*Decay+0.1)
- *   rattle  = 4 weighted band-passes over the band-limited held noise
- *   body    = env^3 * (1-Click)^0.7 * (NoiseTone^0.7*s
- *                                          + 0.3*(1-NoiseTone)^0.7*rattle)
- *   click   = env_c^10 * Click^0.7 * rattle
- *   out     = 1.5*tanh(blend) * 1.10479 -> LP at NoisePitch*Sweep contour
+ *   env_c   = AR^10(1 ms, 0.1*Decay+0.04)
+ *   rattle  = broadband wire noise plus three weighted band-passes over
+ *             the band-limited held noise
+ *   body    = env^3 * (NoiseTone^0.5*(1-Click)^0.25*core
+ *                     + 0.3*(1-NoiseTone)^0.7*(1-Click)^0.7*rattle)
+ *   click   = env_c^10 * 63/80*Click^0.25 * rattle
+ *   out     = tanh(1.5*mix) * 1.10 -> LP at NoisePitch*Sweep contour
  */
 
 /* Apply the parameters to the Snare engine. */
@@ -723,19 +725,27 @@ static void h5_snare_apply(void *engine,
     sn->noise_pitch_q16 = params[H5_PARAM_NOISE_PITCH];
     sn->sweep_q16 = params[H5_PARAM_SWEEP];
 
-    sn->tone_gain_q16 = h5_pow07_q16(noise_tone);
+    /* The Snare's Noise/Tone control is a balance, not a tone amount: the
+     * shell tone follows the square root of the setting while the rattle
+     * follows (1-NoiseTone)^0.7, so both sides move together and the knob
+     * sweeps from a bare shell to a bare rattle. The square root is the
+     * integer square root, so no table is needed. */
+    sn->tone_gain_q16 = h5_mul_q16(h5_sqrt_q16(noise_tone),
+        h5_pow025_q16(H5_Q16_ONE - click));
     sn->noise_gain_q16 = h5_mul_q16(
-        h5_pow07_q16(H5_Q16_ONE - noise_tone), H5_SNARE_NOISE_WEIGHT_Q16);
-    sn->body_gain_q16 = h5_pow07_q16(H5_Q16_ONE - click);
-    sn->click_gain_q16 = h5_pow07_q16(click);
+        h5_mul_q16(h5_pow07_q16(H5_Q16_ONE - noise_tone),
+            H5_SNARE_NOISE_WEIGHT_Q16),
+        h5_pow07_q16(H5_Q16_ONE - click));
+    sn->click_gain_q16 = h5_mul_q16(h5_pow025_q16(click),
+        H5_SNARE_CLICK_WEIGHT_Q16);
 
     h5_setup_pitch(&sn->pitch_curve, &sn->base_inc, params, sample_rate);
 
     /* Body envelope: AR^3, 1 ms attack, Decay release. Transient: AR^10,
-     * 1 ms attack, 0.2*Decay + 0.1 s release. */
+     * 1 ms attack, a short release that follows the decay loosely. */
     h5_env_set_times(&sn->env, H5_SNARE_ATTACK_Q16, decay, sample_rate);
     h5_env_set_times(&sn->env_click, H5_SNARE_CLICK_ATTACK_Q16,
-        (2 * decay + H5_Q16_ONE) / 10, sample_rate);
+        (decay + (2 * H5_Q16_ONE) / 5) / 10, sample_rate);
 
     /* Rattle resonators, output low-pass, pre-filter: parameter change. */
     h5_pf_setup(&sn->pf, sample_rate);
@@ -745,8 +755,6 @@ static void h5_snare_apply(void *engine,
         H5_SNARE_RATTLE_Q_2, sample_rate);
     h5_svf_tune(&sn->rattle[2], H5_SVF_BP, H5_SNARE_RATTLE_FREQ_3,
         H5_SNARE_RATTLE_Q_3, sample_rate);
-    h5_svf_tune(&sn->rattle[3], H5_SVF_BP, H5_SNARE_RATTLE_FREQ_4,
-        H5_SNARE_RATTLE_Q_4, sample_rate);
     h5_svf_tune(&sn->out_filter, H5_SVF_LP, params[H5_PARAM_NOISE_PITCH],
         H5_SNARE_OUT_Q16, sample_rate);
     h5_sweep_build(&sn->out_sweep, H5_SVF_LP, H5_SNARE_OUT_Q16,
@@ -771,7 +779,7 @@ void h5_snare_setup(void *engine, h5_voice voice,
     h5_env_init(&sn->env);
     h5_env_init(&sn->env_click);
     h5_noise_init_voice(&sn->noise, H5_VOICE_SNARE, sample_rate);
-    for (i = 0u; i < 4u; i++) {
+    for (i = 0u; i < 3u; i++) {
         h5_svf_reset(&sn->rattle[i]);
     }
     h5_svf_reset(&sn->out_filter);
@@ -781,7 +789,6 @@ void h5_snare_setup(void *engine, h5_voice voice,
     sn->noise_pitch_q16 = 0;
     sn->tone_gain_q16 = 0;
     sn->noise_gain_q16 = 0;
-    sn->body_gain_q16 = 0;
     sn->click_gain_q16 = 0;
     sn->sweep_q16 = 0;
     sn->pf.k50 = 0;
@@ -801,7 +808,7 @@ void h5_snare_trigger(void *engine)
     sn->phase = 0u;
     h5_env_trigger(&sn->env);
     h5_env_trigger(&sn->env_click);
-    for (i = 0u; i < 4u; i++) {
+    for (i = 0u; i < 3u; i++) {
         h5_svf_reset(&sn->rattle[i]);
     }
     h5_svf_reset(&sn->out_filter);
@@ -813,8 +820,8 @@ void h5_snare_trigger(void *engine)
 int32_t h5_snare_process(void *engine)
 {
     struct h5_snare_s *sn = (struct h5_snare_s *)engine;
-    int32_t env, env_click, env3, s, s2, u;
-    int32_t rattle, body, click, mix, half, blended;
+    int32_t env, env_click, env3, s, st, u;
+    int32_t rattle, body, click, mix;
     int32_t cutoff;
     size_t i;
 
@@ -834,20 +841,20 @@ int32_t h5_snare_process(void *engine)
     env3 = h5_cube_q30(env);
 
     /* Pitch envelope: f = TonePitch * 1.5^(Bend * env^3 / 12). */
-    h5_tone_osc(&sn->phase, &sn->pitch_curve, env3, &s, &s2);
+    h5_tone_osc(&sn->phase, &sn->pitch_curve, env3, &s, &st);
 
-    /* Four weighted band-pass filters on the band-limited held noise. */
+    /* The rattle: broadband wire noise plus three resonances. */
     u = h5_pf_run(&sn->pf, h5_noise_next(&sn->noise));
-    rattle = 0;
-    for (i = 0u; i < 4u; i++) {
+    rattle = h5_mul_q16(u, H5_SNARE_RATTLE_WIRE_Q16);
+    for (i = 0u; i < 3u; i++) {
         rattle = h5_sat_add_q31(rattle, h5_mul_q16(
             h5_svf_run(&sn->rattle[i], u), h5_snare_rattle_weight[i]));
     }
 
-    /* Body: env^3 * (1-Click)^0.7
-     *       * (NoiseTone^0.7*s + 0.3*(1-NoiseTone)^0.7*rattle). */
-    body = h5_body_mix(s, rattle, env3, sn->tone_gain_q16, sn->noise_gain_q16,
-        sn->body_gain_q16);
+    /* Body: env^3 * (1-Click)^0.25
+     *       * (NoiseTone^0.125*core + 0.3*(1-NoiseTone)^0.7*rattle). */
+    body = h5_body_mix(h5_tone_core(s, st), rattle, env3, sn->tone_gain_q16,
+        sn->noise_gain_q16);
 
     /* Transient: env_c^10 * Click^0.7 * rattle. Skip it once the burst
      * envelope is silent. */
@@ -857,19 +864,12 @@ int32_t h5_snare_process(void *engine)
     }
     mix = h5_sat_add_q31(body, click);
 
-    /* The shaper branch rides the body envelope (see Tom). */
-    half = h5_mul_q16(h5_shaped_sine(s, s2, env3), sn->body_gain_q16);
-    blended = h5_sat_add_q31(
-        h5_mul_q16(mix, H5_Q16_ONE - H5_SNARE_DRIVE_Q16),
-        h5_mul_q16(half, h5_mul_q16(H5_SNARE_DRIVE_Q16,
-            H5_SNARE_SHAPER_WEIGHT_Q16)));
-
     /* Sweep lowers the output cutoff as the body decays. The contour depth
      * is half the base cutoff at full Sweep. */
     cutoff = h5_snare_cutoff(sn->noise_pitch_q16, sn->sweep_q16, env3 >> 14);
     h5_sweep_apply(&sn->out_sweep, cutoff, &sn->out_filter);
 
-    return h5_output_stage(blended, &sn->out_filter);
+    return h5_output_stage(mix, &sn->out_filter);
 }
 
 /* The engine operation sets. The voice table in h5_voice.c pairs each set

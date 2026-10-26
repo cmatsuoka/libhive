@@ -12,11 +12,58 @@
  * inside a phase the accumulated rounding error stays below len/2 LSB of
  * Q30 (well under 0.001), and the peak value is clamped to exactly 1.0, so
  * the error never leaves the attack/release phases.
+ *
+ * The file also carries the fractional power helpers the drum voices use
+ * for their balance controls. They are evaluated on parameter changes only.
  */
 
 #include "h5_internal.h"
 
 #define H5_ENV_ONE (1 << 30)
+
+/* Integer square root: the largest integer whose square is at most the
+ * argument. The bit-by-bit form needs no division and no rounding mode
+ * changes, and it runs once per parameter change. */
+static uint32_t h5_isqrt64(uint64_t v)
+{
+    uint64_t r = 0u;
+    uint64_t bit = 1ull << 62;
+
+    while (bit > v) {
+        bit >>= 2;
+    }
+    while (bit != 0u) {
+        if (v >= r + bit) {
+            v -= r + bit;
+            r = (r >> 1) + bit;
+        } else {
+            r >>= 1;
+        }
+        bit >>= 2;
+    }
+    return (uint32_t)r;
+}
+
+/* The square root of a Q16 value, in Q16. */
+int32_t h5_sqrt_q16(int32_t x_q16)
+{
+    if (x_q16 <= 0) {
+        return 0;
+    }
+    return (int32_t)h5_isqrt64((uint64_t)(uint32_t)x_q16 << 16);
+}
+
+/* x^0.25 in Q16: two square roots. */
+int32_t h5_pow025_q16(int32_t x_q16)
+{
+    return h5_sqrt_q16(h5_sqrt_q16(x_q16));
+}
+
+/* x^0.125 in Q16: three square roots. */
+int32_t h5_pow0125_q16(int32_t x_q16)
+{
+    return h5_sqrt_q16(h5_pow025_q16(x_q16));
+}
 
 void h5_env_init(struct h5_env_s *e)
 {
